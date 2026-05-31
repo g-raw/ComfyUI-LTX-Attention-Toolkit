@@ -1,9 +1,7 @@
 from __future__ import annotations
 import types
 
-import torch
-
-from ..utils.helpers import get_call_counts, reset_call_count
+from ..utils.helpers import reset_call_count
 
 
 def _make_block_hook(block_idx: int, timestep_ref: list,

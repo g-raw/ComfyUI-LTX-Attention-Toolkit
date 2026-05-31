@@ -1,8 +1,6 @@
 from __future__ import annotations
 import types
 
-import torch
-
 from ..core.stores      import AttentionStore, QKVStore
 from ..core.hooks       import install_hook
 from ..core.model_patch import wrap_diffusion_model, unwrap_diffusion_model
