@@ -371,5 +371,5 @@ Priority order per call:
 
 ## License
 
-MIT
+GPL 3.0
 
