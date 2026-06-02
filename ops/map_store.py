@@ -19,7 +19,7 @@ def make_map_store_callback(map_data: dict, parsed_heads,
                   head_idx_arg: int, step_idx: int,
                   timestep: float, num_frames: int):
 
-        W_all   = attn_map.float()
+        W_all = attn_map.detach().contiguous().cpu()
         H_heads = W_all.shape[0]
 
         head_range = (
@@ -34,10 +34,10 @@ def make_map_store_callback(map_data: dict, parsed_heads,
         def to_spatial(vec):
             total = vec.shape[0]
             if total == n_frames_actual * latent_height * latent_width:
-                return vec.view(n_frames_actual, latent_height, latent_width).cpu()
+                return vec.view(n_frames_actual, latent_height, latent_width)
             if total % P == 0:
-                return vec.view(total // P, latent_height, latent_width).cpu()
-            return vec.view(1, 1, -1).cpu()
+                return vec.view(total // P, latent_height, latent_width)
+            return vec.view(1, 1, -1)
 
         use_full = (
             store_mode == "full_fp16" or
@@ -47,12 +47,12 @@ def make_map_store_callback(map_data: dict, parsed_heads,
         for h_idx in head_range:
             W         = W_all[h_idx]
             entry     = {
-                "key_map":   to_spatial(W.mean(dim=0)),
-                "query_map": to_spatial(W.mean(dim=1)),
+                "key_map":   to_spatial(W.mean(dim=0).float()),
+                "query_map": to_spatial(W.mean(dim=1).float()),
                 "timestep":  timestep,
             }
             if use_full:
-                entry["full"] = W.half().cpu()
+                entry["full"] = W
 
             map_data.setdefault(block_idx, {}) \
                     .setdefault(step_idx, {})[h_idx] = entry

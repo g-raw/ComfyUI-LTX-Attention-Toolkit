@@ -1,14 +1,15 @@
-from .nodes.capture       import LTXAttentionCaptureSetup, LTXQKVCapture
-from .nodes.transfer      import LTXAttentionHeadFreeze, LTXQKVTransfer
-from .nodes.visualize     import (LTXAttentionQueryMap, LTXAttentionKeyMap,
+from .nodes.capture         import LTXAttentionCaptureSetup, LTXQKVCapture
+from .nodes.transfer        import LTXAttentionHeadFreeze, LTXQKVTransfer
+from .nodes.visualize       import (LTXAttentionQueryMap, LTXAttentionKeyMap,
                                    LTXAttentionMetricsViz, LTXAttentionGridViz)
-from .nodes.evolution     import LTXAttentionTimestepEvolution
-from .nodes.io            import (LTXAttentionStoreDump, LTXAttentionStoreLoad,
+from .nodes.evolution       import LTXAttentionTimestepEvolution
+from .nodes.io              import (LTXAttentionStoreDump, LTXAttentionStoreLoad,
                                    LTXQKVDump, LTXQKVLoad)
-from .nodes.inspect       import (LTXAttentionStoreInspect, LTXQKVStoreInspect,
+from .nodes.inspect         import (LTXAttentionStoreInspect, LTXQKVStoreInspect,
                                    LTXMapStoreInspect)
-from .nodes.map_store_node import LTXAttentionMapStore
-from .nodes.utils         import LTXLatentDims, LTXAttentionCompareRuns
+from .nodes.map_store_node  import LTXAttentionMapStore
+from .nodes.utils           import LTXLatentDims, LTXAttentionCompareRuns
+from .nodes.zone_analysis   import LTXAttentionZoneAnalysis
 
 NODE_CLASS_MAPPINGS = {
     # Capture
@@ -23,6 +24,7 @@ NODE_CLASS_MAPPINGS = {
     "LTXAttentionMetricsViz":        LTXAttentionMetricsViz,
     "LTXAttentionGridViz":           LTXAttentionGridViz,
     "LTXAttentionTimestepEvolution": LTXAttentionTimestepEvolution,
+    "LTXAttentionZoneAnalysis":      LTXAttentionZoneAnalysis,
     # Map Store
     "LTXAttentionMapStore":          LTXAttentionMapStore,
     # IO
@@ -49,6 +51,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXAttentionMetricsViz":        "LTX Attn — Metrics Heatmap",
     "LTXAttentionGridViz":           "LTX Attn — Grid Viz",
     "LTXAttentionTimestepEvolution": "LTX Attn — Timestep Evolution",
+    "LTXAttentionZoneAnalysis":      "LTX Attn — Zone Analysis",
     "LTXAttentionMapStore":          "LTX Attn — Map Store",
     "LTXAttentionStoreDump":         "LTX Attn — Store Dump",
     "LTXAttentionStoreLoad":         "LTX Attn — Store Load",
