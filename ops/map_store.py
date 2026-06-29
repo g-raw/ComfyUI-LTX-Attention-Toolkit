@@ -9,9 +9,9 @@ def make_map_store_callback(map_data: dict, parsed_heads,
                              latent_frames: int, latent_height: int,
                              latent_width: int):
     """
-    Retourne le callback store_map(attn_map, block_idx, head_idx_arg,
+    Returns the callback store_map(attn_map, block_idx, head_idx_arg,
                                     step_idx, timestep, num_frames)
-    qui écrit dans map_data.
+    which writes into map_data.
     """
     P = latent_height * latent_width
 
@@ -21,6 +21,10 @@ def make_map_store_callback(map_data: dict, parsed_heads,
 
         W_all = attn_map.detach().contiguous().cpu()
         H_heads = W_all.shape[0]
+
+        # ── Sanity check: skip invalid maps silently ────────────────────────
+        if W_all.numel() == 0 or not torch.isfinite(W_all).all():
+            return
 
         head_range = (
             range(H_heads) if parsed_heads is None
@@ -64,8 +68,8 @@ def build_map_store_forward(original_forward, parsed_blocks, parsed_steps,
                              target_call_n, store_map_cb, parsed_heads,
                              step_counters, num_frames_ref):
     """
-    Retourne un patched_forward qui injecte le callback MapStore
-    dans transformer_options via le hook de bloc.
+    Returns a patched_forward which injects the MapStore callback
+    into transformer_options via the block hook.
     """
     def patched_forward(self_dm, x, timestep, context, attention_mask,
                         frame_rate=25, transformer_options={},

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 class AttentionStore:
     """
-    Singleton — stocke les maps d'attention et métriques par bloc/step.
+    Singleton — stores attention maps and metrics per block/step.
 
     Layout SA/CA :
       store[block_idx][step_idx] = {
@@ -40,7 +40,7 @@ class AttentionStore:
         self.ca:            Dict[int, Dict[int, dict]] = {}
         self._step_counter: Dict[str, int]             = {}
         self.cfg:           dict                       = {}
-        # Optionnel — utilisé par LTXAttentionMapStore
+        # Optional — used by LTXAttentionMapStore
         self._save_callback = None
         self._parsed_heads  = None
 
@@ -53,8 +53,8 @@ class AttentionStore:
                attn_weights: torch.Tensor,
                num_frames: int, patches_per_frame: int):
         """
-        attn_weights : [H, Sq, Sk] fp16 sur GPU.
-        Calcule les métriques (chunked) et stocke selon cfg.
+        attn_weights : [H, Sq, Sk] fp16 on GPU.
+        Computes metrics (chunked) and stores according to cfg.
         """
         cfg = self.cfg
         if not cfg:
@@ -80,7 +80,7 @@ class AttentionStore:
         H_heads, Sq, Sk = W.shape
         CHUNK = 4
 
-        # ── Entropie ────────────────────────────────────────────────────────
+        # ── Entropy ─────────────────────────────────────────────────────────
         eps          = 1e-6
         entropy_list = []
         for h0 in range(0, H_heads, CHUNK):
@@ -90,8 +90,9 @@ class AttentionStore:
             entropy_list.append(ent.cpu())
             del wc
         entropy = torch.cat(entropy_list)
+        del entropy_list
 
-        # ── Localité temporelle / spatiale ──────────────────────────────────
+        # ── Temporal / spatial locality ─────────────────────────────────────
         temporal_scores = torch.zeros(H_heads)
         spatial_scores  = torch.zeros(H_heads)
 
@@ -143,7 +144,7 @@ class AttentionStore:
 
 class QKVStore:
     """
-    Singleton — stocke les tenseurs Q, K, V bruts par bloc/step/tête.
+    Singleton — stores raw Q, K, V tensors per block/step/head.
 
     Layout :
       data[attn_type][block_idx][step_idx][head_idx] = {
@@ -208,6 +209,7 @@ class QKVStore:
             q_h = split_heads(q.detach().float())
             k_h = split_heads(k.detach().float())
             v_h = split_heads(v.detach().float())
+            del q, k, v  # free original inputs early
 
         store_dict = self.data[attn_type]
         if block_idx not in store_dict:
@@ -225,9 +227,12 @@ class QKVStore:
                 "timestep": timestep,
             }
 
+        # Free head-split tensors after extracting data (no longer needed)
+        del q_h, k_h, v_h
+
     def get_qkv(self, attn_type: str, block_idx: int,
                 step_idx: int, head_idx: int):
-        """Retourne (q, k, v) float32 CPU ou None."""
+        """Returns (q, k, v) float32 CPU or None."""
         try:
             e = self.data[attn_type][block_idx][step_idx][head_idx]
             return e["q"].float(), e["k"].float(), e["v"].float()

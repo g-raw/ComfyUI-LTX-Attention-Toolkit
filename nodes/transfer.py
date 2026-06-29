@@ -35,11 +35,11 @@ class LTXAttentionHeadFreeze:
         src   = store.sa if attn_type == "sa" else store.ca
 
         if block_idx not in src:
-            raise ValueError(f"[Freeze] Bloc {block_idx} absent du store.")
+            raise ValueError(f"[Freeze] Block {block_idx} not found in store.")
         if freeze_step_source not in src[block_idx]:
             raise ValueError(
-                f"[Freeze] Step {freeze_step_source} absent. "
-                f"Disponibles : {sorted(src[block_idx].keys())}"
+                f"[Freeze] Step {freeze_step_source} not found. "
+                f"Available: {sorted(src[block_idx].keys())}"
             )
         entry = src[block_idx][freeze_step_source]
         if entry.get("map") is None:
@@ -166,25 +166,25 @@ class LTXQKVTransfer:
 
         qkv_store = QKVStore.get()
         if not any(qkv_store.data[t] for t in qkv_store.data):
-            raise ValueError("[Transfer] QKVStore vide.")
+            raise ValueError("[Transfer] QKVStore is empty.")
 
         block_head_map = self._parse_block_head_mapping(
             target_blocks, head_indices, qkv_store, attn_type, source_step
         )
         if not block_head_map:
-            raise ValueError(f"[Transfer] Aucun bloc résolu depuis '{target_blocks}'.")
+            raise ValueError(f"[Transfer] No blocks resolved from '{target_blocks}'.")
 
         # Validation
         store_src = qkv_store.data.get(attn_type, {})
         for blk_idx, heads in block_head_map.items():
             if blk_idx not in store_src:
-                raise ValueError(f"[Transfer] Bloc {blk_idx} absent.")
+                raise ValueError(f"[Transfer] Block {blk_idx} not found.")
             if source_step not in store_src[blk_idx]:
-                raise ValueError(f"[Transfer] Step {source_step} absent pour bloc {blk_idx}.")
+                raise ValueError(f"[Transfer] Step {source_step} not found for block {blk_idx}.")
             captured = sorted(store_src[blk_idx][source_step].keys())
             missing  = [h for h in heads if h not in captured]
             if missing:
-                raise ValueError(f"[Transfer] Têtes {missing} absentes. Capturées: {captured}")
+                raise ValueError(f"[Transfer] Heads {missing} not found in store. Captured: {captured}")
 
         target_call_n    = 0 if attn_type == "sa" else 1
         per_block_configs = {

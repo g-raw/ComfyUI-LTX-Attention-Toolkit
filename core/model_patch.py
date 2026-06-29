@@ -8,9 +8,9 @@ def _make_block_hook(block_idx: int, timestep_ref: list,
                      num_frames_ref: list, ppf_ref: list,
                      cfg: dict, existing_hook=None):
     """
-    Hook injecté via patches_replace["dit"].
-    Injecte les métadonnées de profiling dans transformer_options
-    puis délègue au bloc original.
+    Hook injected via patches_replace["dit"].
+    Injects profiling metadata into transformer_options
+    then delegates to the original block.
     """
     def block_hook(args: dict, orig: dict):
         to = dict(args.get("transformer_options", {}))
@@ -31,8 +31,8 @@ def _make_block_hook(block_idx: int, timestep_ref: list,
 
 def wrap_diffusion_model(diffusion_model, cfg: dict):
     """
-    Wrappe _forward pour injecter la géométrie et les block hooks
-    à chaque step de débruitage.
+    Wraps _forward to inject geometry and block hooks
+    at each denoising step.
     """
     original_forward  = diffusion_model._forward
     timestep_ref      = [0.0]
@@ -93,8 +93,8 @@ def unwrap_diffusion_model(diffusion_model):
 def make_simple_patched_forward(original_forward, block_configs: dict,
                                  step_counters: dict):
     """
-    Fabrique un patched_forward générique pour les nodes qui n'ont pas
-    besoin de la géométrie complète (Transfer, Freeze, MapStore).
+    Fabrics a generic patched_forward for nodes that don't need
+    full geometry (Transfer, Freeze, MapStore).
 
     block_configs : {block_idx: callable(dit_replace, current_step, existing)}
       Le callable modifie dit_replace en place.

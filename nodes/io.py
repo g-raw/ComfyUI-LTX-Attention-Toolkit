@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import torch
 
 from ..core.stores import AttentionStore, QKVStore
@@ -57,6 +58,8 @@ class LTXAttentionStoreLoad:
     OUTPUT_NODE  = True
 
     def load(self, input_path, merge):
+        if not os.path.isfile(input_path):
+            raise FileNotFoundError(f"[LTXProfiler/Load] File not found: {input_path}")
         payload = torch.load(input_path, map_location="cpu", weights_only=False)
         store   = AttentionStore.get()
         if not merge:
@@ -71,9 +74,9 @@ class LTXAttentionStoreLoad:
 
         n_sa    = sum(len(s) for s in store.sa.values())
         n_ca    = sum(len(s) for s in store.ca.values())
-        summary = (f"Chargé: {input_path}\n"
-                   f"SA: {len(store.sa)} blocs {n_sa} entrées | "
-                   f"CA: {len(store.ca)} blocs {n_ca} entrées")
+        summary = (f"Loaded: {input_path}\n"
+                   f"SA: {len(store.sa)} blocks {n_sa} entries | "
+                   f"CA: {len(store.ca)} blocks {n_ca} entries")
         print(f"[LTXProfiler] {summary}")
         return (summary,)
 
@@ -115,6 +118,8 @@ class LTXQKVLoad:
     OUTPUT_NODE  = True
 
     def load(self, input_path, merge):
+        if not os.path.isfile(input_path):
+            raise FileNotFoundError(f"[LTXProfiler/QKVLoad] File not found: {input_path}")
         payload = torch.load(input_path, map_location="cpu", weights_only=False)
         store   = QKVStore.get()
         if not merge:
@@ -124,6 +129,6 @@ class LTXQKVLoad:
         else:
             for blk, steps in payload["data"].items():
                 store.data.setdefault(blk, {}).update(steps)
-        summary = f"QKV chargé: {input_path}"
+        summary = f"QKV loaded: {input_path}"
         print(f"[LTXProfiler] {summary}")
         return (summary,)

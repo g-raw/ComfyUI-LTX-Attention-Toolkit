@@ -1,5 +1,7 @@
 from __future__ import annotations
 import math
+import warnings
+
 import torch
 import torch.nn.functional as F
 
@@ -9,6 +11,9 @@ from ..utils.helpers import get_call_counts
 def _resample_kv(k_src, v_src, target_len):
     if k_src.shape[0] == target_len:
         return k_src, v_src
+    ratio = target_len / k_src.shape[0]
+    if abs(ratio - 1.0) > 1.0:  # ratio > 2x or < 0.5x
+        warnings.warn(f"QKV resampling ratio {ratio:.2f}x is large — results may be inaccurate.")
     def _resamp(t):
         return F.interpolate(
             t.T.unsqueeze(0), size=target_len,
@@ -106,6 +111,9 @@ def apply_qkv_transfer(q, k, v, heads, cfg,
                 q_src, k_src, v_src = [t.to(device=q.device) for t in qkv_src]
                 k_src, v_src = _resample_kv(k_src, v_src, Sq)
                 if use_q and q_src.shape[0] != Sq:
+                    q_ratio = Sq / q_src.shape[0]
+                    if abs(q_ratio - 1.0) > 1.0:
+                        warnings.warn(f"Q interpolation ratio {q_ratio:.2f}x is large — results may be inaccurate.")
                     q_src = F.interpolate(
                         q_src.T.unsqueeze(0), size=Sq,
                         mode="linear", align_corners=False,

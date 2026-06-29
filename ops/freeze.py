@@ -1,4 +1,6 @@
 from __future__ import annotations
+import warnings
+
 import torch
 import torch.nn.functional as F
 
@@ -48,6 +50,11 @@ def apply_head_freeze(q, k, v, heads, freeze_head_idx,
         fm   = frozen_map.to(device=v.device, dtype=torch.float32)
 
         if fm.shape[0] != Sq or fm.shape[1] != v_.shape[2]:
+            orig_h, orig_w = fm.shape[0], fm.shape[1]
+            if abs(Sq / max(1, orig_h)) > 2.0 or abs(v_.shape[2] / max(1, orig_w)) > 2.0:
+                warnings.warn(f"Frozen attention map resized from ({orig_h}, {orig_w}) "
+                              f"to ({Sq}, {v_.shape[2]}). "
+                              f"Ratio: {Sq/max(1,orig_h):.1f}x — may produce artifacts.")
             fm = F.interpolate(
                 fm.unsqueeze(0).unsqueeze(0),
                 size=(Sq, v_.shape[2]),

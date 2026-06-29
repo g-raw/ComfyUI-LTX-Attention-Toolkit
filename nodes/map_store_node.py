@@ -1,5 +1,6 @@
 from __future__ import annotations
 import types
+import warnings
 
 from ..core.stores      import AttentionStore
 from ..core.hooks       import install_hook
@@ -21,7 +22,7 @@ class LTXAttentionMapStore:
             "store_mode":    (["reduced", "full_fp16", "hybrid"],
                              {"default": "reduced"}),
             "full_blocks":   ("STRING", {"default": "8,16,24,32,40",
-                             "tooltip": "Blocs full_fp16 pour le mode hybrid."}),
+                             "tooltip": "Blocks for hybrid mode storage."}),
             "latent_frames": ("INT", {"default": 10, "min": 1, "max": 256}),
             "latent_height": ("INT", {"default": 11, "min": 1, "max": 256}),
             "latent_width":  ("INT", {"default": 20, "min": 1, "max": 256}),
@@ -42,9 +43,15 @@ class LTXAttentionMapStore:
         parsed_steps   = parse_int_set(capture_steps)
         full_block_set = set(int(x.strip()) for x in full_blocks.split(",")
                              if x.strip())
+
+        # Validate store_mode against enum
+        valid_modes = ("reduced", "full_fp16", "hybrid")
+        if store_mode not in valid_modes:
+            raise ValueError(f"store_mode must be one of {valid_modes}, got '{store_mode}'")
+
         target_call_n  = 0 if attn_type == "sa" else 1
 
-        # ── AttentionStore minimal (métriques désactivées) ─────────────────
+        # ── AttentionStore minimal (metrics disabled) ──────────────────────
         store = AttentionStore.get()
         if reset_store:
             store.reset()
@@ -56,7 +63,7 @@ class LTXAttentionMapStore:
             "capture_steps":   parsed_steps,
         }
 
-        # ── map_data : dict local retourné comme ATTN_MAP_STORE ────────────
+        # ── map_data: local dict returned as ATTN_MAP_STORE ────────────────
         map_data      = {}
         step_counters = {}
         num_frames_ref = [latent_frames]
@@ -67,13 +74,13 @@ class LTXAttentionMapStore:
             latent_frames, latent_height, latent_width,
         )
 
-        # Exposer le callback sur le store pour que _make_full_hook le trouve
+        # Expose callback on store for _make_full_hook to find it
         store._save_callback = store_map_cb
         store._parsed_heads  = parsed_heads
 
         install_hook()
 
-        # ── Patch modèle ───────────────────────────────────────────────────
+        # ── Patch model ───────────────────────────────────────────────────
         patched          = model.clone()
         dm               = patched.model.diffusion_model
         unwrap_diffusion_model(dm)
@@ -89,7 +96,7 @@ class LTXAttentionMapStore:
         dm._profiler_patched          = True
         dm._profiler_original_forward = original_forward
 
-        # ── Estimation RAM ─────────────────────────────────────────────────
+        # ── RAM estimation ─────────────────────────────────────────────────
         P        = latent_height * latent_width
         n_full   = len(full_block_set if store_mode == "hybrid"
                        else parsed_blocks if store_mode == "full_fp16"
@@ -102,9 +109,9 @@ class LTXAttentionMapStore:
 
         print(
             f"[LTXProfiler/MapStore] mode={store_mode}\n"
-            f"  blocs={len(parsed_blocks)} "
-            f"({'dont '+str(n_full)+' full' if store_mode=='hybrid' else ''})\n"
-            f"  têtes={'32' if parsed_heads is None else len(parsed_heads)}\n"
+            f"  blocks={len(parsed_blocks)} "
+            f"({'of '+str(n_full)+' full' if store_mode=='hybrid' else ''})\n"
+            f"  heads={'32' if parsed_heads is None else len(parsed_heads)}\n"
             f"  RAM full≈{ram_full:.1f}GB  red≈{ram_red:.2f}GB  "
             f"tot≈{ram_full+ram_red:.1f}GB"
         )

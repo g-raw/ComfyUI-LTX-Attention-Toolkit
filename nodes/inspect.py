@@ -21,12 +21,12 @@ class LTXAttentionStoreInspect:
     def inspect(self, **kwargs):
         store = AttentionStore.get()
         lines = ["═"*50, "  AttentionStore Inspect", "═"*50]
-        lines.append(f"cfg: {store.cfg or '⚠ VIDE'}")
+        lines.append(f"cfg: {store.cfg or '⚠ EMPTY'}")
         lines.append("")
         for label, src in [("SA", store.sa), ("CA", store.ca)]:
             lines.append(f"── {label} ──")
             if not src:
-                lines.append("  (vide)")
+                lines.append("  (empty)")
                 continue
             for blk in sorted(src.keys()):
                 steps   = src[blk]
@@ -38,9 +38,9 @@ class LTXAttentionStoreInspect:
                 ts      = last.get("timestep", "?")
                 ts_str  = f"{ts:.3f}" if isinstance(ts, float) else str(ts)
                 lines.append(
-                    f"  Bloc {blk:2d}: {len(steps)} steps | "
-                    f"{n_heads} têtes | ts≈{ts_str} | "
-                    f"map={'oui '+str(list(last['map'].shape)) if has_map else 'non'}"
+                    f"  Block {blk:2d}: {len(steps)} steps | "
+                    f"{n_heads} heads | ts≈{ts_str} | "
+                    f"map={'present '+str(list(last['map'].shape)) if has_map else 'absent'}"
                 )
         summary = "\n".join(lines)
         print(summary)
@@ -82,7 +82,7 @@ class LTXQKVStoreInspect:
                     ) / 1e6
                     total_mb += step_mb
                     lines.append(
-                        f"  Bloc {blk} Step {step} | "
+                        f"  Block {blk} Step {step} | "
                         f"têtes={heads} | Q={list(sample['q'].shape)} | "
                         f"~{step_mb:.2f}MB"
                     )
@@ -106,7 +106,7 @@ class LTXMapStoreInspect:
 
     def inspect(self, map_store):
         if not map_store:
-            msg = "⚠ map_store VIDE"
+            msg = "⚠ map_store EMPTY"
             print(f"[MapStoreInspect] {msg}")
             return (msg,)
 
@@ -123,8 +123,8 @@ class LTXMapStoreInspect:
                     shapes = {k: list(sample[k].shape)
                               for k in views if hasattr(sample[k], "shape")}
                     lines.append(
-                        f"  Bloc {blk:2d} | Step {step} | "
-                        f"{n} têtes | vues={views} | shapes={shapes}"
+                        f"  Block {blk:2d} | Step {step} | "
+                        f"{n} heads | views={views} | shapes={shapes}"
                     )
         lines.append(f"Total: {total_entries} entrées")
         summary = "\n".join(lines)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import types
+import warnings
 
 from ..core.stores      import AttentionStore, QKVStore
 from ..core.hooks       import install_hook
@@ -30,6 +31,21 @@ class LTXAttentionCaptureSetup:
     def setup(self, model, capture_sa, capture_ca, store_full_maps,
               map_downsample, target_blocks, capture_steps, reset_store):
 
+        # Validate reset_store is a boolean
+        if not isinstance(reset_store, (bool, int)):
+            raise ValueError(f"reset_store must be a boolean, got {type(reset_store).__name__}")
+
+        # Validate map_downsample in [1, 64]
+        if not (1 <= map_downsample <= 64):
+            raise ValueError(f"map_downsample must be in [1, 64], got {map_downsample}")
+
+        # Validate capture_steps format
+        cs = capture_steps.strip().lower()
+        if cs != "all":
+            parsed_steps_test = parse_int_set(capture_steps)
+            if parsed_steps_test is not None and len(parsed_steps_test) == 0:
+                raise ValueError(f"capture_steps '{capture_steps}' does not contain valid integers.")
+
         parsed_blocks = parse_int_set(target_blocks, range(48)) or set(range(48))
         parsed_steps  = parse_int_set(capture_steps)
 
@@ -55,8 +71,8 @@ class LTXAttentionCaptureSetup:
         print(
             f"[LTXProfiler] CaptureSetup\n"
             f"  SA={capture_sa} CA={capture_ca} full_maps={store_full_maps}\n"
-            f"  Blocs : {sorted(parsed_blocks)}\n"
-            f"  Steps : {'tous' if parsed_steps is None else sorted(parsed_steps)}"
+            f"  Blocks : {sorted(parsed_blocks)}\n"
+            f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}"
         )
         return (patched,)
 
@@ -167,8 +183,8 @@ class LTXQKVCapture:
 
         print(
             f"[LTXProfiler] QKVCapture\n"
-            f"  Blocs : {sorted(parsed_blocks)}\n"
-            f"  Têtes : {'toutes' if parsed_heads is None else sorted(parsed_heads)}\n"
-            f"  Steps : {'tous' if parsed_steps is None else sorted(parsed_steps)}"
+            f"  Blocks : {sorted(parsed_blocks)}\n"
+            f"  Heads : {'all' if parsed_heads is None else sorted(parsed_heads)}\n"
+            f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}"
         )
         return (patched,)

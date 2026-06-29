@@ -34,7 +34,7 @@ class LTXAttentionTimestepEvolution:
 
         if block_idx not in src:
             raise ValueError(
-                f"Bloc {block_idx} absent. Disponibles: {sorted(src.keys())}"
+                f"Block {block_idx} not found. Available: {sorted(src.keys())}"
             )
 
         steps_data = src[block_idx]
@@ -42,12 +42,12 @@ class LTXAttentionTimestepEvolution:
         n_steps    = len(step_keys)
 
         if n_steps < 2:
-            raise ValueError(f"Seulement {n_steps} step(s). Besoin d'au moins 2.")
+            raise ValueError(f"Only {n_steps} step(s). Need at least 2.")
 
         first_entry = steps_data[step_keys[0]]
         n_heads     = len(first_entry.get(metric, []))
         if n_heads == 0:
-            raise ValueError(f"Métrique '{metric}' absente.")
+            raise ValueError(f"Metric '{metric}' not found in data.")
 
         if head_indices.strip().lower() == "all":
             head_list = list(range(n_heads))
@@ -100,7 +100,7 @@ class LTXAttentionTimestepEvolution:
 
         out   = torch.from_numpy(canvas).unsqueeze(0).clamp(0.0, 1.0)
         stats = (
-            f"Bloc {block_idx} | {metric} ({attn_type})\n"
+            f"Block {block_idx} | {metric} ({attn_type})\n"
             f"Steps: {n_steps}  Têtes: {head_list}\n"
             f"Plage: [{v_min:.4f}, {v_max:.4f}]\n"
             f"Timesteps: {ts_labels[0]} → {ts_labels[-1]}"

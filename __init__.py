@@ -10,6 +10,7 @@ from .nodes.inspect         import (LTXAttentionStoreInspect, LTXQKVStoreInspect
 from .nodes.map_store_node  import LTXAttentionMapStore
 from .nodes.utils           import LTXLatentDims, LTXAttentionCompareRuns
 from .nodes.zone_analysis   import LTXAttentionZoneAnalysis
+from .nodes.rf_inversion    import LTXRFForwardSampler, LTXRFReverseSampler
 
 NODE_CLASS_MAPPINGS = {
     # Capture
@@ -39,6 +40,9 @@ NODE_CLASS_MAPPINGS = {
     # Utils
     "LTXLatentDims":                 LTXLatentDims,
     "LTXAttentionCompareRuns":       LTXAttentionCompareRuns,
+    #RF Inversion
+    "LTXRFForwardSampler":           LTXRFForwardSampler,
+    "LTXRFReverseSampler":           LTXRFReverseSampler,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -62,4 +66,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXMapStoreInspect":            "LTX Map Store — Inspect",
     "LTXLatentDims":                 "LTX — Latent Dims",
     "LTXAttentionCompareRuns":       "LTX Attn — Compare Runs",
+    "LTXRFForwardSampler":           "LTX RF-Inv Forward (x0→xT)",
+    "LTXRFReverseSampler":           "LTX RF-Inv Reverse (xT→x0)",
 }

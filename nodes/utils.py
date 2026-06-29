@@ -61,7 +61,7 @@ class LTXAttentionCompareRuns:
                     n_heads = len(e[metric]); break
             if n_heads: break
         if n_heads == 0:
-            raise ValueError(f"Métrique '{metric}' absente.")
+            raise ValueError(f"Metric '{metric}' not found.")
         mat = np.zeros((n_heads, len(block_indices)), dtype=np.float32)
         for col, blk in enumerate(block_indices):
             steps_data = src[blk]
@@ -97,10 +97,10 @@ class LTXAttentionCompareRuns:
         img_np = add_grid_lines(img_np, cell_size, mh, mb)
         out    = torch.from_numpy(img_np).unsqueeze(0).clamp(0.0, 1.0)
         stats  = (
-            f"Métrique: {metric} ({attn_type}) | Step: {step_idx}\n"
-            f"A: moy={mat_a.mean():.4f} std={mat_a.std():.4f}\n"
-            f"B: moy={mat_b.mean():.4f} std={mat_b.std():.4f}\n"
-            f"Diff: moy={diff.mean():.4f} std={diff.std():.4f}\n"
+            f"Metric: {metric} ({attn_type}) | Step: {step_idx}\n"
+            f"A: mean={mat_a.mean():.4f} std={mat_a.std():.4f}\n"
+            f"B: mean={mat_b.mean():.4f} std={mat_b.std():.4f}\n"
+            f"Diff: mean={diff.mean():.4f} std={diff.std():.4f}\n"
             f"Max A>B: {diff.max():.4f} | Max B>A: {(-diff).max():.4f}"
         )
         return (out, stats)

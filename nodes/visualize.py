@@ -51,8 +51,8 @@ class LTXAttentionQueryMap:
 
         if Sq != T * Lh * Lw:
             raise ValueError(
-                f"[QueryMap] Sq={Sq} ≠ T×Lh×Lw={T*Lh*Lw}. "
-                "Vérifie num_frames/latent_height/latent_width."
+                f"[QueryMap] Sq={Sq} != T x Lh x Lw={T*Lh*Lw}. "
+                "Check num_frames, latent_height, latent_width."
             )
 
         if key_token_idx >= 0:
@@ -112,7 +112,7 @@ class LTXAttentionKeyMap:
 
         if Sk != T * Lh * Lw:
             raise ValueError(
-                f"[KeyMap] Sk={Sk} ≠ T×Lh×Lw={T*Lh*Lw}."
+                f"[KeyMap] Sk={Sk} != T x Lh x Lw={T*Lh*Lw}."
             )
 
         if query_token_idx >= 0:
@@ -157,7 +157,7 @@ class LTXAttentionMetricsViz:
         store = AttentionStore.get()
         src   = store.sa if attn_type == "sa" else store.ca
         if not src:
-            raise ValueError(f"Aucune donnée {attn_type}.")
+            raise ValueError(f"No {attn_type} data captured.")
 
         block_indices = sorted(src.keys())
         n_blocks      = len(block_indices)
@@ -168,7 +168,7 @@ class LTXAttentionMetricsViz:
                     n_heads = len(e[metric]); break
             if n_heads: break
         if n_heads == 0:
-            raise ValueError(f"Métrique '{metric}' introuvable.")
+            raise ValueError(f"Metric '{metric}' not found.")
 
         mat = np.zeros((n_heads, n_blocks), dtype=np.float32)
         for col, blk in enumerate(block_indices):
@@ -204,10 +204,10 @@ class LTXAttentionMetricsViz:
             for fi in flat_idx
         )
         stats = (
-            f"Métrique: {metric} | Type: {attn_type} | Step: {step_idx}\n"
-            f"Moy: {mat.mean():.4f}  Std: {mat.std():.4f}\n"
+            f"Metric: {metric} | Type: {attn_type} | Step: {step_idx}\n"
+            f"Mean: {mat.mean():.4f}  Std: {mat.std():.4f}\n"
             f"Top-{top_k}: {top_str}\n"
-            f"Blocs: {block_indices}"
+            f"Blocks: {block_indices}"
         )
         return (out, stats)
 
@@ -251,10 +251,10 @@ class LTXAttentionGridViz:
             idxs = [int(x.strip()) for x in s.split(",") if x.strip()]
             idxs = [i for i in idxs if 0 <= i < n]
             if not idxs:
-                raise ValueError(f"Aucun index valide (max={n-1})")
+                raise ValueError(f"No valid index (max={n-1})")
             return ("single" if len(idxs) == 1 else "stack"), idxs
         except ValueError as e:
-            raise ValueError(f"frame_mode '{s}' invalide: {e}")
+            raise ValueError(f"frame_mode '{s}' invalid: {e}")
 
     def visualize(self, map_store, view, target_blocks, target_heads,
                   step_idx, frame_mode, colormap, upsample, cell_padding,
@@ -262,7 +262,7 @@ class LTXAttentionGridViz:
 
         available_blocks = sorted(map_store.keys())
         if not available_blocks:
-            raise ValueError("[GridViz] map_store vide.")
+            raise ValueError("[GridViz] map_store empty.")
 
         first_steps     = map_store[available_blocks[0]]
         first_step_key  = sorted(first_steps.keys())[0]
@@ -275,8 +275,8 @@ class LTXAttentionGridViz:
                       else [int(x.strip()) for x in target_heads.split(",")
                             if x.strip() and int(x.strip()) in available_heads])
 
-        if not block_list: raise ValueError("[GridViz] Aucun bloc valide.")
-        if not head_list:  raise ValueError("[GridViz] Aucune tête valide.")
+        if not block_list: raise ValueError("[GridViz] no valid blocks.")
+        if not head_list:  raise ValueError("[GridViz] no valid heads.")
 
         n_blocks, n_heads = len(block_list), len(head_list)
         H_lat_ref = latent_height
@@ -315,7 +315,7 @@ class LTXAttentionGridViz:
 
         render_mode, frame_indices = self._parse_frame_mode(frame_mode, F_ref)
 
-        # ── Normalisation ─────────────────────────────────────────────────
+        # ── Normalization ─────────────────────────────────────────────────
         if normalize == "global":
             all_vals = np.concatenate([raw[h][b].ravel()
                                        for h in range(n_heads)
@@ -353,7 +353,7 @@ class LTXAttentionGridViz:
                 mn, mx = float(arr.min()), float(arr.max())
                 return (arr - mn) / (mx - mn + 1e-8)
 
-        # ── Rendu ─────────────────────────────────────────────────────────
+        # ── Rendering ─────────────────────────────────────────────────────────
         lut       = get_colormap(colormap)
         lut_turbo = get_colormap("turbo")
         pad       = cell_padding
@@ -361,7 +361,7 @@ class LTXAttentionGridViz:
         lbl_w     = 24 if draw_labels else 0
 
         def render_cell(frame_arr: np.ndarray) -> np.ndarray:
-            """[H, W] float32 [0,1] → [H*up, W*up, 3] float32"""
+            """[H, W] float32 [0,1] -> [H*up, W*up, 3] float32"""
             up  = upsample
             img = np.repeat(np.repeat(frame_arr, up, axis=0), up, axis=1)
             return lut[(img * 255).astype(np.uint8)].astype(np.float32)
@@ -404,7 +404,7 @@ class LTXAttentionGridViz:
                     grid[y0:y0+1, lbl_w:] = 0.3
             return grid
 
-        # ── Sélecteurs ───────────────────────────────────────────────────
+        # ── Selectors ───────────────────────────────────────────────────
         grids = []
         if render_mode == "avg":
             grids.append(build_grid(lambda d: d.mean(axis=0)))
@@ -437,7 +437,7 @@ class LTXAttentionGridViz:
 
         out  = torch.from_numpy(np.stack(padded)).clamp(0.0, 1.0)
         info = (
-            f"Grille: {n_blocks} blocs × {n_heads} têtes | "
-            f"{len(grids)} image(s) | {max_w}×{max_h}px"
+            f"Grid: {n_blocks} blocks x {n_heads} heads | "
+            f"{len(grids)} image(s) | {max_w}x{max_h}px"
         )
         return (out, info)

@@ -1,8 +1,11 @@
 from __future__ import annotations
 import math
+import logging
 
 import torch
 import torch.nn.functional as F
+
+logger = logging.getLogger("ltx_profiler")
 
 from ..core.stores   import AttentionStore, QKVStore
 from ..utils.helpers import increment_call_count, get_call_counts
@@ -15,12 +18,13 @@ _HOOK_ACTIVE              = False
 def _compute_attn_map(q: torch.Tensor, k: torch.Tensor,
                       heads: int) -> torch.Tensor:
     """
-    Calcule softmax(QK^T/√d) chunked sur les têtes.
+    Computes softmax(QK^T/sqrt(d)) chunked over heads.
     q, k : [B, S, H*D_head]
-    Retourne [H, Sq, Sk] fp16.
+    Returns [H, Sq, Sk] fp16.
     """
     B, Sq, HD = q.shape
     D_head    = HD // heads
+    H_heads   = heads
 
     def to_bhsd(t):
         b, s, hd = t.shape
@@ -29,30 +33,31 @@ def _compute_attn_map(q: torch.Tensor, k: torch.Tensor,
     with torch.no_grad():
         q_ = to_bhsd(q.detach())
         k_ = to_bhsd(k.detach())
+        Sk   = k_.shape[2]
         scale = 1.0 / math.sqrt(D_head)
         chunk = 4
-        maps  = []
+        result = torch.empty(H_heads, Sq, Sk, dtype=torch.float16, device=q.device)
         for h0 in range(0, heads, chunk):
-            h1  = min(h0 + chunk, heads)
-            qc  = q_[:1, h0:h1]
-            kc  = k_[:1, h0:h1]
-            sc  = torch.einsum("bhsd,bhkd->bhsk", qc, kc) * scale
-            wc  = F.softmax(sc, dim=-1).half()
-            maps.append(wc[0])
+            h1   = min(h0 + chunk, heads)
+            qc   = q_[:1, h0:h1]
+            kc   = k_[:1, h0:h1]
+            sc   = torch.einsum("bhsd,bhkd->bhsk", qc, kc) * scale
+            wc   = F.softmax(sc, dim=-1).half()
+            result[h0:h1] = wc[0]
             del qc, kc, sc, wc
-        return torch.cat(maps, dim=0)  # [H, Sq, Sk]
+        return result  # [H, Sq, Sk]
 
 
 def _make_full_hook(original_fn):
     """
-    Hook universel — branché sur optimized_attention et optimized_attention_masked.
-    Gère dans l'ordre :
-      1. Profiling classique     → AttentionStore
-      2. MapStore callback       → map_data via _ms_store_cb
-      3. QKV Capture             → QKVStore
-      4. QKV Transfer            → substitution Q/K/V
-      5. Head Freeze             → map gelée
-      6. Normal                  → délégation
+    Universal hook — attached to optimized_attention and optimized_attention_masked.
+    Manages in order:
+      1. Classic profiling     → AttentionStore
+      2. MapStore callback     → map_data via _ms_store_cb
+      3. QKV Capture           → QKVStore
+      4. QKV Transfer          → substitution Q/K/V
+      5. Head Freeze           → frozen map
+      6. Normal                → delegation
     """
 
     def hooked(q, k, v, heads, *args,
@@ -78,6 +83,24 @@ def _make_full_hook(original_fn):
         is_sa  = (call_n == 0)
         is_ca  = (call_n == 1)
 
+        # ── Pre-compute attention map once if any op might need it ─────────
+        target_call_ms = to.get("_ms_target_call", 0)
+        ms_cb           = to.get("_ms_store_cb")
+        needs_attn_map = bool(
+            (to.get("_profiler_block_idx") is not None) or
+            (ms_cb is not None and call_n == target_call_ms)
+        )
+        computed_attn_map = None
+
+        if needs_attn_map:
+            try:
+                B, Sq, HD = q.shape
+                if HD % heads == 0:
+                    computed_attn_map = _compute_attn_map(q, k, heads)
+                    to["_computed_attn_map"] = computed_attn_map
+            except Exception as e:
+                logger.error("[AttnMap] pre-compute error b=%d: %s", block_idx, e, exc_info=True)
+
         # ── 1. Profiling ────────────────────────────────────────────────────
         if to.get("_profiler_block_idx") is not None:
             store = AttentionStore.get()
@@ -86,20 +109,21 @@ def _make_full_hook(original_fn):
                 capture_ca = to.get("_profiler_capture_ca", True)
                 if (is_sa and capture_sa) or (is_ca and capture_ca):
                     try:
-                        B, Sq, HD = q.shape
-                        if HD % heads == 0:
-                            attn_map = _compute_attn_map(q, k, heads)
-                            store.record(
-                                attn_type         = "sa" if is_sa else "ca",
-                                block_idx         = block_idx,
-                                timestep          = to.get("_profiler_timestep", -1.0),
-                                attn_weights      = attn_map,
-                                num_frames        = to.get("_profiler_num_frames", 1),
-                                patches_per_frame = to.get("_profiler_patches_per_frame", 1),
-                            )
-                            del attn_map
+                        attn_map = computed_attn_map
+                        if attn_map is None:
+                            B, Sq, HD = q.shape
+                            if HD % heads == 0:
+                                attn_map = _compute_attn_map(q, k, heads)
+                        store.record(
+                            attn_type         = "sa" if is_sa else "ca",
+                            block_idx         = block_idx,
+                            timestep          = to.get("_profiler_timestep", -1.0),
+                            attn_weights      = attn_map,
+                            num_frames        = to.get("_profiler_num_frames", 1),
+                            patches_per_frame = to.get("_profiler_patches_per_frame", 1),
+                        )
                     except Exception as e:
-                        print(f"[LTXProfiler] profiling error b={block_idx}: {e}")
+                        logger.error("[Profiling] block b=%d: %s", block_idx, e, exc_info=True)
 
         # ── 2. MapStore callback ─────────────────────────────────────────────
         ms_cb          = to.get("_ms_store_cb")
@@ -107,22 +131,26 @@ def _make_full_hook(original_fn):
 
         if ms_cb is not None and call_n == target_call_ms:
             try:
-                B, Sq, HD = q.shape
-                if HD % heads == 0:
-                    attn_map = _compute_attn_map(q, k, heads)
-                    ms_cb(
-                        attn_map,
-                        block_idx,
-                        -1,                           # head_idx=-1 = tous
-                        to.get("_ms_step_idx",   0),
-                        to.get("_ms_timestep",   0.0),
-                        to.get("_ms_n_frames",   1),
-                    )
-                    del attn_map
+                attn_map = computed_attn_map
+                if attn_map is None:
+                    B, Sq, HD = q.shape
+                    if HD % heads == 0:
+                        attn_map = _compute_attn_map(q, k, heads)
+                ms_cb(
+                    attn_map,
+                    block_idx,
+                    -1,                           # head_idx=-1 = all
+                    to.get("_ms_step_idx",   0),
+                    to.get("_ms_timestep",   0.0),
+                    to.get("_ms_n_frames",   1),
+                )
             except Exception as e:
-                import traceback
-                print(f"[LTXProfiler/MapStore] error b={block_idx}: {e}")
-                traceback.print_exc()
+                logger.error("[MapStore] block b=%d: %s", block_idx, e, exc_info=True)
+
+        # Cleanup pre-computed attn map reference
+        if computed_attn_map is not None:
+            del computed_attn_map
+            to.pop("_computed_attn_map", None)
 
         # ── 3. QKV Capture ───────────────────────────────────────────────────
         if to.get("_qkv_capture_active"):
@@ -139,7 +167,7 @@ def _make_full_hook(original_fn):
                             q, k, v, heads,
                         )
                     except Exception as e:
-                        print(f"[LTXProfiler/QKV] capture error: {e}")
+                        logger.error("[QKV] block b=%d: %s", block_idx, e, exc_info=True)
 
         # ── 4. QKV Transfer ──────────────────────────────────────────────────
         if to.get("_qkv_transfer_active") and is_sa:
@@ -180,7 +208,7 @@ def install_hook():
     _ca.optimized_attention        = _make_full_hook(_ORIGINAL_OPT_ATTN)
     _ca.optimized_attention_masked = _make_full_hook(_ORIGINAL_OPT_ATTN_MASKED)
     _HOOK_ACTIVE = True
-    print("[LTXProfiler] Hooks installés.")
+    print("[LTXProfiler] Hooks installed.")
 
 
 def uninstall_hook():
@@ -191,4 +219,4 @@ def uninstall_hook():
     _ca.optimized_attention        = _ORIGINAL_OPT_ATTN
     _ca.optimized_attention_masked = _ORIGINAL_OPT_ATTN_MASKED
     _HOOK_ACTIVE = False
-    print("[LTXProfiler] Hooks retirés.")
+    print("[LTXProfiler] Hooks removed.")

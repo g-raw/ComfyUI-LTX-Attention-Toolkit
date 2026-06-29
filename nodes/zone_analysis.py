@@ -10,17 +10,17 @@ from ..utils.graphics import apply_colormap_batch, add_grid_lines
 
 class LTXAttentionZoneAnalysis:
     """
-    Pour chaque (bloc, tête), calcule le ratio :
+    For each (block, head), compute the ratio:
         attention_mass_vers_zone / fraction_zone_globale
 
-    ratio > 1  → la tête regarde particulièrement cette zone
-    ratio ≈ 1  → attention uniforme (pas de préférence)
-    ratio < 1  → la tête évite la zone
+    ratio > 1  → the head focuses on this zone
+    ratio ≈ 1  → uniform attention (no preference)
+    ratio < 1  → the head avoids this zone
 
-    Le mask est en coordonnées pixel (image finale) et est
-    automatiquement redimensionné en espace latent (÷32 pour LTX).
+    The mask uses pixel coordinates (final image) and is
+    automatically resized to latent space (/32 for LTX).
 
-    Nécessite store_full_maps=True dans LTXAttentionCaptureSetup.
+    Requires store_full_maps=True in LTXAttentionCaptureSetup.
     """
 
     @classmethod
@@ -30,24 +30,24 @@ class LTXAttentionZoneAnalysis:
                 "zone_mask":      ("MASK",),
                 "attn_type":      (["sa", "ca"], {"default": "sa"}),
                 "step_idx":       ("INT",  {"default": -1, "min": -1, "max": 255,
-                                   "tooltip": "-1 = moyenne sur tous les steps."}),
+                                   "tooltip": "-1 = average over all steps."}),
                 "num_frames":     ("INT",  {"default": 1,  "min": 1,  "max": 256}),
                 "latent_height":  ("INT",  {"default": 16, "min": 1,  "max": 256}),
                 "latent_width":   ("INT",  {"default": 16, "min": 1,  "max": 256}),
                 "query_mode":     (["key_mass", "query_mass", "both"],
                                   {"default": "key_mass",
                                    "tooltip":
-                                       "key_mass   : masse reçue par les tokens zone "
-                                                    "(qui REGARDE la zone ?)\n"
-                                       "query_mass : masse émise par les tokens zone "
-                                                    "(depuis où REGARDE la zone ?)\n"
-                                       "both       : moyenne des deux"}),
+                                       "key_mass   : mass received by zone tokens "
+                                                    "(which LOOK AT the zone?)\n"
+                                       "query_mass : mass emitted by zone tokens "
+                                                    "(from where does the zone LOOK?)\n"
+                                       "both       : average of both"}),
                 "aggregate_time": ("BOOLEAN", {"default": True,
-                                   "tooltip": "True = agréger sur toutes les frames.\n"
-                                              "False = analyser uniquement la frame 0."}),
+                                   "tooltip": "True = aggregate over all frames.\n"
+                                              "False = analyze only frame 0."}),
                 "mask_threshold": ("FLOAT",  {"default": 0.5, "min": 0.0, "max": 1.0,
                                    "step": 0.05,
-                                   "tooltip": "Seuil de binarisation du mask latent."}),
+                                   "tooltip": "Binarization threshold for the latent mask."}),
                 "colormap":       (["viridis","inferno","turbo","coolwarm"],
                                   {"default": "viridis"}),
                 "cell_size":      ("INT",  {"default": 16, "min": 4, "max": 64}),
@@ -103,13 +103,13 @@ class LTXAttentionZoneAnalysis:
                            zone_indices: torch.Tensor,
                            query_mode: str) -> float:
         """
-        Calcule la masse d'attention liée à la zone pour une tête.
+        Calculate attention mass related to the zone for a head.
 
         W : [H, Sq, Sk]
 
-        key_mass   : moyenne de W[h, :, zone_idx]  → combien les queries regardent zone
-        query_mass : moyenne de W[h, zone_idx, :]  → où regardent les tokens zone
-        both       : moyenne des deux
+        key_mass   : mean of W[h, :, zone_idx]  → how much queries look at zone
+        query_mass : mean of W[h, zone_idx, :]  → where do zone tokens look
+        both       : average of the two
         """
         h_map = W[head_idx]   # [Sq, Sk]
         Sq, Sk = h_map.shape
@@ -136,7 +136,7 @@ class LTXAttentionZoneAnalysis:
             return (km + qm) / 2.0
 
     # ──────────────────────────────────────────────────────────────────────
-    # Analyse principale
+    # Main analysis
     # ──────────────────────────────────────────────────────────────────────
 
     def analyze(self, zone_mask, attn_type, step_idx, num_frames,
@@ -148,9 +148,9 @@ class LTXAttentionZoneAnalysis:
         src   = store.sa if attn_type == "sa" else store.ca
 
         if not src:
-            raise ValueError(f"[ZoneAnalysis] Store {attn_type} vide.")
+            raise ValueError(f"[ZoneAnalysis] Store {attn_type} is empty.")
 
-        # ── Vérifier que des maps existent ────────────────────────────────
+        # ── Check that maps exist ────────────────────────────────
         has_maps = any(
             e.get("map") is not None
             for steps in src.values()
@@ -158,27 +158,27 @@ class LTXAttentionZoneAnalysis:
         )
         if not has_maps:
             raise ValueError(
-                "[ZoneAnalysis] Aucune map complète trouvée.\n"
-                "Relance la capture avec store_full_maps=True."
+                "[ZoneAnalysis] No complete maps found.\n"
+                "Re-run capture with store_full_maps=True."
             )
 
         P = latent_height * latent_width
         T = num_frames
 
-        # ── Normaliser le mask en entrée ───────────────────────────────────
+        # ── Normalize mask input ───────────────────────────────────
         if zone_mask.dim() == 3:
             mask_2d = zone_mask[0]        # [H_img, W_img]
         else:
             mask_2d = zone_mask
 
-        # ── Indices de tokens dans la zone ────────────────────────────────
+        # ── Token indices within the zone ────────────────────────────────
         zone_spatial, zone_full = self._mask_to_latent_indices(
             mask_2d, latent_height, latent_width, mask_threshold, T
         )
 
         if len(zone_spatial) == 0:
             raise ValueError(
-                "[ZoneAnalysis] Le mask ne couvre aucun token latent.\n"
+                "[ZoneAnalysis] The mask covers no latent tokens.\n"
                 f"Résolution latente : {latent_height}×{latent_width} = {P} tokens.\n"
                 f"Abaisse mask_threshold (actuellement {mask_threshold})."
             )
@@ -186,10 +186,10 @@ class LTXAttentionZoneAnalysis:
         zone_indices = zone_full if aggregate_time else zone_spatial
         n_zone       = len(zone_indices)
         n_total      = T * P if aggregate_time else P
-        # Fraction de tokens dans la zone (référence "aléatoire")
+        # Fraction of tokens in the zone (reference "random")
         zone_frac    = n_zone / n_total
 
-        # ── Détecter n_heads ──────────────────────────────────────────────
+        # ── Detect n_heads ──────────────────────────────────────────────
         n_heads = 0
         for steps in src.values():
             for e in steps.values():
@@ -202,7 +202,7 @@ class LTXAttentionZoneAnalysis:
         block_indices = sorted(src.keys())
         n_blocks      = len(block_indices)
 
-        # ── Matrice des ratios [n_heads, n_blocks] ────────────────────────
+        # ── Ratio matrix [n_heads, n_blocks] ────────────────────────
         ratio_mat = np.zeros((n_heads, n_blocks), dtype=np.float32)
         count_mat = np.zeros((n_heads, n_blocks), dtype=np.int32)
 
@@ -221,7 +221,7 @@ class LTXAttentionZoneAnalysis:
                 W = entry["map"].float()      # [H, Sq, Sk] fp32 CPU
                 H_h, Sq, Sk = W.shape
 
-                # Vérifier la compatibilité géométrique
+                # Check geometric compatibility
                 expected = T * P if aggregate_time else P
                 if Sk < expected or Sq < expected:
                     continue
@@ -261,8 +261,8 @@ class LTXAttentionZoneAnalysis:
             b_pos = fi % n_blocks
             h_pos = fi // n_blocks
             rank_lines.append(
-                f"  #{i+1:02d} | Bloc {block_indices[b_pos]:2d} "
-                f"Tête {h_pos:2d} | ratio={ratio_mat.ravel()[fi]:.3f}"
+                f"  #{i+1:02d} | Block {block_indices[b_pos]:2d} "
+                f"Head {h_pos:2d} | ratio={ratio_mat.ravel()[fi]:.3f}"
             )
 
         # Stats sur la couverture du mask
