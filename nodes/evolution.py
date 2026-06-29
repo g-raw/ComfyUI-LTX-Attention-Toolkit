@@ -108,8 +108,8 @@ class LTXAttentionTimestepEvolution:
         out   = torch.from_numpy(canvas).unsqueeze(0).clamp(0.0, 1.0)
         stats = (
             f"Block {block_idx} | {metric} ({attn_type})\n"
-            f"Steps: {n_steps}  Têtes: {head_list}\n"
-            f"Plage: [{v_min:.4f}, {v_max:.4f}]\n"
+            f"Steps: {n_steps}  Heads: {head_list}\n"
+            f"Range: [{v_min:.4f}, {v_max:.4f}]\n"
             f"Timesteps: {ts_labels[0]} → {ts_labels[-1]}"
         )
         return (out, stats)

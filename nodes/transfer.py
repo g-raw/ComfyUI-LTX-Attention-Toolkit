@@ -52,7 +52,7 @@ class LTXAttentionHeadFreeze:
             )
         entry = src[block_idx][freeze_step_source]
         if entry.get("map") is None:
-            raise ValueError("[Freeze] Aucune map. Relance avec store_full_maps=True.")
+            raise ValueError("[Freeze] No map. Re-run with store_full_maps=True.")
 
         frozen_map    = entry["map"][head_idx].float()
         patched       = model.clone()
@@ -110,7 +110,7 @@ class LTXQKVTransfer:
             "attn_type":          (["sa", "ca"], {"default": "sa"}),
             "target_blocks":      ("STRING", {"default": "24",
                                    "tooltip": "Simple: '24,32' ou 'all'\n"
-                                              "Étendu: '24:8,12 | 32:all'"}),
+                                              "Extended: '24:8,12 | 32:all'"}),
             "head_indices":       ("STRING", {"default": "8,12,16"}),
             "source_step":        ("INT",    {"default": 0, "min": 0, "max": 255}),
             "transfer_from_step": ("INT",    {"default": 0, "min": 0, "max": 999}),
@@ -170,7 +170,7 @@ class LTXQKVTransfer:
         if use_map:
             use_q = use_k = use_v = False
         if not any([use_map, use_q, use_k, use_v]):
-            print("[Transfer] ⚠ Aucun composant activé.")
+            print("[Transfer] No component selected.")
             return (model,)
 
         reg = get_registry()

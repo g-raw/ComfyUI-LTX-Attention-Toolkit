@@ -18,12 +18,12 @@ def reset_call_count(block_idx: int):
 
 
 def increment_call_count(block_idx: int) -> int:
-    """Increments and returns the NEW value (post-increment)."""
+    """Increments and returns the OLD value (pre-increment)."""
     counts = get_call_counts()
     key    = f"block_{block_idx}"
     n      = counts.get(key, 0)
     counts[key] = n + 1
-    return n   # returns the old value = current call_n
+    return n   # old value = current call_n (0-based)
 
 
 # ── Helpers store ──────────────────────────────────────────────────────────
@@ -81,6 +81,6 @@ def log_node(node_name: str, attn_type: str, block_idx: int,
     ts_str = f"{ts:.3f}" if isinstance(ts, float) else str(ts)
     print(
         f"[LTXProfiler] {node_name} — {attn_type} | "
-        f"bloc {block_idx} | step {step_idx} | timestep≈{ts_str} | "
-        f"{n_heads} têtes | latent {T}×{Lh}×{Lw}"
+        f"block {block_idx} | step {step_idx} | timestep≈{ts_str} | "
+        f"{n_heads} heads | latent {T}×{Lh}×{Lw}"
     )

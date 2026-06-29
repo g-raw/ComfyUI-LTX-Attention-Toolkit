@@ -71,14 +71,14 @@ class LTXAttentionZoneAnalysis:
                                  threshold: float,
                                  num_frames: int) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Convertit un mask pixel en indices de tokens latents.
+        Convert a pixel mask to latent token indices.
 
         Args:
             zone_mask : [H_img, W_img] float [0,1]
 
         Returns:
-            zone_indices_spatial : [n_zone]       indices dans [0, P-1]
-            zone_indices_full    : [T * n_zone]   indices dans [0, T*P-1]
+            zone_indices_spatial : [n_zone]       indices in [0, P-1]
+            zone_indices_full    : [T * n_zone]   indices in [0, T*P-1]
         """
         P = latent_height * latent_width
 
@@ -188,8 +188,8 @@ class LTXAttentionZoneAnalysis:
         if len(zone_spatial) == 0:
             raise ValueError(
                 "[ZoneAnalysis] The mask covers no latent tokens.\n"
-                f"Résolution latente : {latent_height}×{latent_width} = {P} tokens.\n"
-                f"Abaisse mask_threshold (actuellement {mask_threshold})."
+                f"Latent resolution: {latent_height}x{latent_width} = {P} tokens.\n"
+                f"Lower mask_threshold (currently {mask_threshold})."
             )
 
         zone_indices = zone_full if aggregate_time else zone_spatial
@@ -241,7 +241,7 @@ class LTXAttentionZoneAnalysis:
                     ratio_mat[h, col] += ratio
                     count_mat[h, col] += 1
 
-        # Normaliser par le nombre de steps effectifs
+        # Normalize by number of effective steps
         safe_count = np.maximum(count_mat, 1)
         ratio_mat  = ratio_mat / safe_count
 
@@ -261,7 +261,7 @@ class LTXAttentionZoneAnalysis:
         img_np    = add_grid_lines(img_np, cell_size, n_heads, n_blocks)
         out       = torch.from_numpy(img_np).unsqueeze(0).clamp(0.0, 1.0)
 
-        # ── Classement ────────────────────────────────────────────────────
+        # ── Ranking ────────────────────────────────────────────────────────
         actual_k = min(top_k, n_heads * n_blocks)
         flat_idx = np.argsort(ratio_mat.ravel())[::-1][:actual_k]
 
@@ -274,19 +274,19 @@ class LTXAttentionZoneAnalysis:
                 f"Head {h_pos:2d} | ratio={ratio_mat.ravel()[fi]:.3f}"
             )
 
-        # Stats sur la couverture du mask
+        # Stats on mask coverage
         mask_pct    = 100.0 * zone_frac
         n_zero_maps = int((count_mat == 0).sum())
 
         stats = (
-            f"Zone : {len(zone_spatial)} tokens / {P} par frame "
-            f"({mask_pct:.1f}% de l'espace latent)\n"
+            f"Zone: {len(zone_spatial)} tokens / {P} per frame "
+            f"({mask_pct:.1f}% of latent space)\n"
             f"Mode  : {query_mode} | "
-            f"Agrégation temporelle : {aggregate_time} ({T} frames)\n"
-            f"Ratio = 1.0 → attention uniforme (baseline aléatoire)\n"
-            f"Ratio > 1.0 → tête focalisée sur la zone\n"
-            f"Blocs sans map : {n_zero_maps} / {n_heads * n_blocks}\n"
-            f"\nTop-{actual_k} têtes focalisées sur la zone :\n"
+            f"Temporal aggregation: {aggregate_time} ({T} frames)\n"
+            f"Ratio = 1.0 → uniform attention (random baseline)\n"
+            f"Ratio > 1.0 → head focused on zone\n"
+            f"Blocks without map: {n_zero_maps} / {n_heads * n_blocks}\n"
+            f"\nTop-{actual_k} heads focused on zone:\n"
             + "\n".join(rank_lines)
         )
 

@@ -43,18 +43,18 @@ def wrap_diffusion_model(diffusion_model, cfg: dict):
                         frame_rate=25, transformer_options={},
                         keyframe_idxs=None, **kwargs):
 
-        # Géométrie
+        # Geometry
         vx = x[0] if isinstance(x, (list, tuple)) else x
         if vx.dim() == 5:
             _, _, F_lat, H_lat, W_lat = vx.shape
             num_frames_ref[0] = F_lat
             ppf_ref[0]        = H_lat * W_lat
 
-        # Timestep scalaire
+        # Scalar timestep
         ts = timestep[0] if isinstance(timestep, (list, tuple)) else timestep
         timestep_ref[0] = float(ts.mean().item())
 
-        # Injection des block hooks
+        # Inject block hooks
         patches_replace = dict(transformer_options.get("patches_replace", {}))
         dit_replace     = dict(patches_replace.get("dit", {}))
 
@@ -97,7 +97,7 @@ def make_simple_patched_forward(original_forward, block_configs: dict,
     full geometry (Transfer, Freeze, MapStore).
 
     block_configs : {block_idx: callable(dit_replace, current_step, existing)}
-      Le callable modifie dit_replace en place.
+      The callable modifies dit_replace in-place.
     """
     def patched_forward(self_dm, x, timestep, context, attention_mask,
                         frame_rate=25, transformer_options={},

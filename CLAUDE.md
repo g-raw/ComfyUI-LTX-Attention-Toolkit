@@ -16,7 +16,7 @@ nodes/   ← ComfyUI node classes (INPUT_TYPES, RETURN_TYPES, FUNCTION)
 ops/     ← Intervention logic (freeze, QKV transfer, map store callbacks)
   │
 core/    ← Data stores + hook infrastructure
-  │        stores.py  — AttentionStore / QKVStore singletons (thread-safe)
+  │        stores.py  — StoreRegistry singleton manager + AttentionStore / QKVStore proxy wrappers (thread-safe)
   │        hooks.py   — Universal hook on comfy.ldm.modules.attention.optimized_attention
   │        model_patch.py — diffusion_model._forward wrapping for block injection
   │
@@ -26,7 +26,7 @@ utils/   ├── helpers.py  — parse helpers, call counter, resolve_entry
 
 ### Key design patterns
 
-- **Singleton stores**: `AttentionStore.get()` and `QKVStore.get()` are process-wide singletons with threading locks. Data layout: `store[attn_type][block_idx][step_idx] = {"map": Tensor, "entropy": Tensor, ...}`.
+- **Named store instances via StoreRegistry**: `get_registry()` returns the singleton registry managing named `_AttnInst` / `_QKVInst` containers. Proxy classes (`AttentionStore`, `QKVStore`) expose the current instance via property dispatch — auto-create "default" if none active. Data layout: `store[attn_type][block_idx][step_idx] = {"map": Tensor, "entropy": Tensor, ...}`.
 - **Universal attention hook** (`core/hooks.py:_make_full_hook`): Installed on both `optimized_attention` and `optimized_attention_masked. Priority order per call: (1) Profiling → AttentionStore, (2) MapStore callback, (3) QKV Capture → QKVStore, (4) QKV Transfer substitution, (5) Head Freeze map injection, (6) Normal pass-through.
 - **Block-level call counting** (`utils/helpers.py:increment_call_count`): Each transformer block makes 2 attention calls per step — call_n==0 is self-attention (SA), call_n==1 is cross-attention (CA). The hook uses thread-local counters keyed by `block_idx`.
 - **Diffusion model patching**: Nodes that need intervention wrap `diffusion_model._forward` via `types.MethodType`, inject `patches_replace["dit"]` into `transformer_options`, and delegate to the original. Use `wrap_diffusion_model()` / `unwrap_diffusion_model()` for setup nodes; use `make_simple_patched_forward()` or inline wrapping for intervention nodes.
@@ -68,7 +68,7 @@ Attention map `W: [H, Sq, Sk] fp16`. Key map = `W.mean(dim=1)` (what's looked at
 ### Adding a new node
 1. Create a new class in the appropriate `nodes/` module with standard ComfyUI interface: `INPUT_TYPES()`, `RETURN_TYPES`, `RETURN_NAMES`, `FUNCTION`, `CATEGORY = "g_raw/LTX/Profiler"`.
 2. Import and register in `__init__.py` under `NODE_CLASS_MAPPINGS` and `NODE_DISPLAY_NAME_MAPPINGS`.
-3. If the node reads/writes store data, use `AttentionStore.get()` or `QKVStore.get()`.
+3. If the node reads/writes store data, instantiate via `AttentionStore()` or `QKVStore()` (proxy classes that auto-select current instance from the registry). For named stores, use `get_registry().create()` / `get_registry().switch_attn()`.
 
 ### Adding a new intervention operation
 1. Implement logic in `ops/` (e.g., `freeze.py`, `qkv_transfer.py`).
