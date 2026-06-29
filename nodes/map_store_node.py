@@ -2,7 +2,7 @@ from __future__ import annotations
 import types
 import warnings
 
-from ..core.stores      import AttentionStore
+from ..core.stores import get_registry, AttentionStore
 from ..core.hooks       import install_hook
 from ..core.model_patch import unwrap_diffusion_model
 from ..ops.map_store    import make_map_store_callback, build_map_store_forward
@@ -18,7 +18,8 @@ class LTXAttentionMapStore:
             "attn_type":     (["sa", "ca"], {"default": "sa"}),
             "target_blocks": ("STRING", {"default": "all"}),
             "target_heads":  ("STRING", {"default": "all"}),
-            "capture_steps": ("STRING", {"default": "all"}),
+            "target_steps":  ("STRING", {"default": "all"}),
+            "store_name":    ("STRING", {"default": "", "placeholder": "optional name", "tooltip": "Named store; empty = auto-generated."}),
             "store_mode":    (["reduced", "full_fp16", "hybrid"],
                              {"default": "reduced"}),
             "full_blocks":   ("STRING", {"default": "8,16,24,32,40",
@@ -29,18 +30,18 @@ class LTXAttentionMapStore:
             "reset_store":   ("BOOLEAN", {"default": True}),
         }}
 
-    RETURN_TYPES  = ("MODEL", "ATTN_MAP_STORE")
-    RETURN_NAMES  = ("patched_model", "map_store")
+    RETURN_TYPES  = ("MODEL", "ATTN_MAP_STORE", "MAP_STORE_HANDLE")
+    RETURN_NAMES  = ("patched_model", "map_store", "store_handle")
     FUNCTION      = "setup"
     CATEGORY      = "g_raw/LTX/Profiler"
 
     def setup(self, model, attn_type, target_blocks, target_heads,
-              capture_steps, store_mode, full_blocks,
+              target_steps, store_name, store_mode, full_blocks,
               latent_frames, latent_height, latent_width, reset_store):
 
         parsed_blocks  = parse_int_set(target_blocks, range(48)) or set(range(48))
         parsed_heads   = parse_int_set(target_heads)
-        parsed_steps   = parse_int_set(capture_steps)
+        parsed_steps   = parse_int_set(target_steps)
         full_block_set = set(int(x.strip()) for x in full_blocks.split(",")
                              if x.strip())
 
@@ -51,10 +52,12 @@ class LTXAttentionMapStore:
 
         target_call_n  = 0 if attn_type == "sa" else 1
 
-        # ── AttentionStore minimal (metrics disabled) ──────────────────────
-        store = AttentionStore.get()
+        # ── Create / switch to named AttentionStore via registry ─────────────
+        reg = get_registry()
+        handle = reg.create(store_name or None)
+        store = reg._get_attn(handle)
         if reset_store:
-            store.reset()
+            store.reset_data()
         store.cfg = {
             "capture_sa":      attn_type == "sa",
             "capture_ca":      attn_type == "ca",
@@ -108,11 +111,11 @@ class LTXAttentionMapStore:
         ram_red  = (n_red + n_full) * n_heads_ * n_steps_ * P * 2 * 4 / 1e9
 
         print(
-            f"[LTXProfiler/MapStore] mode={store_mode}\n"
+            f"[LTXProfiler/MapStore] mode={store_mode}  store={handle}\n"
             f"  blocks={len(parsed_blocks)} "
             f"({'of '+str(n_full)+' full' if store_mode=='hybrid' else ''})\n"
             f"  heads={'32' if parsed_heads is None else len(parsed_heads)}\n"
             f"  RAM full≈{ram_full:.1f}GB  red≈{ram_red:.2f}GB  "
             f"tot≈{ram_full+ram_red:.1f}GB"
         )
-        return (patched, map_data)
+        return (patched, map_data, handle)

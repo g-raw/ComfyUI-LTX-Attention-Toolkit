@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from ..core.stores    import AttentionStore
+from ..core.stores    import AttentionStore, get_registry
 from ..utils.graphics import get_colormap, draw_line
 
 
@@ -11,6 +11,7 @@ class LTXAttentionTimestepEvolution:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
+            "store_handle":   ("STRING", {"default": "", "placeholder": "select store..."}),
             "attn_type":    (["sa", "ca"], {"default": "sa"}),
             "block_idx":    ("INT",    {"default": 0, "min": 0, "max": 47}),
             "metric":       (["entropy","temporal","spatial","sink"],
@@ -26,10 +27,16 @@ class LTXAttentionTimestepEvolution:
     FUNCTION     = "plot"
     CATEGORY     = "g_raw/LTX/Profiler"
 
-    def plot(self, attn_type, block_idx, metric, head_indices,
+    def plot(self, store_handle, attn_type, block_idx, metric, head_indices,
              img_width, img_height, colormap):
 
-        store = AttentionStore.get()
+        if store_handle and store_handle.strip():
+
+
+            get_registry().switch_attn(store_handle)
+
+
+        store = AttentionStore()
         src   = store.sa if attn_type == "sa" else store.ca
 
         if block_idx not in src:

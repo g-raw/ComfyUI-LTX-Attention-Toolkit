@@ -1,7 +1,7 @@
 from __future__ import annotations
 import types
 
-from ..core.stores      import AttentionStore, QKVStore
+from ..core.stores      import AttentionStore, QKVStore, get_registry
 from ..core.hooks       import install_hook
 from ..core.model_patch import unwrap_diffusion_model
 from ..ops.freeze       import make_freeze_hook
@@ -31,7 +31,16 @@ class LTXAttentionHeadFreeze:
     def apply_freeze(self, model, block_idx, head_idx, freeze_from_step,
                      freeze_step_source, attn_type, blend_weight):
 
-        store = AttentionStore.get()
+        reg = get_registry()
+
+
+        h = reg._cur_attn or reg.create("default")
+
+
+        reg.switch_attn(h)
+
+
+        store = AttentionStore()
         src   = store.sa if attn_type == "sa" else store.ca
 
         if block_idx not in src:
@@ -164,7 +173,16 @@ class LTXQKVTransfer:
             print("[Transfer] ⚠ Aucun composant activé.")
             return (model,)
 
-        qkv_store = QKVStore.get()
+        reg = get_registry()
+
+
+        qh = reg._cur_qkv or reg.create_qkv("default")
+
+
+        reg.switch_qkv(qh)
+
+
+        qkv_store = QKVStore()
         if not any(qkv_store.data[t] for t in qkv_store.data):
             raise ValueError("[Transfer] QKVStore is empty.")
 

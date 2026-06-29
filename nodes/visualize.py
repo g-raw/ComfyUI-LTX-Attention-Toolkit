@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ..core.stores    import AttentionStore
+from ..core.stores    import AttentionStore, get_registry
 from ..utils.graphics import (get_colormap, apply_colormap_batch,
                                add_grid_lines, render_head_grid)
 from ..utils.helpers  import resolve_entry, parse_heads, log_node
@@ -14,6 +14,7 @@ class LTXAttentionQueryMap:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
+            "store_handle":   ("STRING", {"default": "", "placeholder": "select store..."}),
             "attn_type":          (["sa", "ca"], {"default": "sa"}),
             "block_idx":          ("INT",    {"default": 0,  "min": 0,  "max": 47}),
             "step_idx":           ("INT",    {"default": -1, "min": -1, "max": 255}),
@@ -34,12 +35,14 @@ class LTXAttentionQueryMap:
     FUNCTION     = "visualize"
     CATEGORY     = "g_raw/LTX/Profiler"
 
-    def visualize(self, attn_type, block_idx, step_idx, head_indices,
+    def visualize(self, store_handle, attn_type, block_idx, step_idx, head_indices,
                   num_frames, latent_height, latent_width,
                   key_token_idx, aggregate_frames, colormap,
                   normalize_per_head, cell_size):
 
-        store = AttentionStore.get()
+        if store_handle and store_handle.strip():
+            get_registry().switch_attn(store_handle)
+        store = AttentionStore()
         src   = store.sa if attn_type == "sa" else store.ca
         entry = resolve_entry(src, block_idx, step_idx, attn_type)
 
@@ -77,6 +80,7 @@ class LTXAttentionKeyMap:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
+            "store_handle":   ("STRING", {"default": "", "placeholder": "select store..."}),
             "block_idx":          ("INT",    {"default": 0,  "min": 0,  "max": 47}),
             "step_idx":           ("INT",    {"default": -1, "min": -1, "max": 255}),
             "head_indices":       ("STRING", {"default": "all"}),
@@ -96,12 +100,14 @@ class LTXAttentionKeyMap:
     FUNCTION     = "visualize"
     CATEGORY     = "g_raw/LTX/Profiler"
 
-    def visualize(self, block_idx, step_idx, head_indices,
+    def visualize(self, store_handle, block_idx, step_idx, head_indices,
                   num_frames, latent_height, latent_width,
                   query_token_idx, aggregate_frames, colormap,
                   normalize_per_head, cell_size):
 
-        store = AttentionStore.get()
+        if store_handle and store_handle.strip():
+            get_registry().switch_attn(store_handle)
+        store = AttentionStore()
         entry = resolve_entry(store.sa, block_idx, step_idx, "sa")
 
         W               = entry["map"].float()
@@ -139,6 +145,7 @@ class LTXAttentionMetricsViz:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
+            "store_handle":   ("STRING", {"default": "", "placeholder": "select store..."}),
             "attn_type": (["sa", "ca"], {"default": "sa"}),
             "metric":    (cls.METRICS,  {"default": "entropy"}),
             "step_idx":  ("INT", {"default": -1, "min": -1, "max": 255}),
@@ -153,8 +160,10 @@ class LTXAttentionMetricsViz:
     FUNCTION     = "visualize"
     CATEGORY     = "g_raw/LTX/Profiler"
 
-    def visualize(self, attn_type, metric, step_idx, colormap, cell_size, normalize):
-        store = AttentionStore.get()
+    def visualize(self, store_handle, attn_type, metric, step_idx, colormap, cell_size, normalize):
+        if store_handle and store_handle.strip():
+            get_registry().switch_attn(store_handle)
+        store = AttentionStore()
         src   = store.sa if attn_type == "sa" else store.ca
         if not src:
             raise ValueError(f"No {attn_type} data captured.")

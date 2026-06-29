@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import torch
 
-from ..core.stores import AttentionStore, QKVStore
+from ..core.stores import AttentionStore, get_registry, QKVStore
 
 
 class LTXAttentionStoreDump:
@@ -21,7 +21,13 @@ class LTXAttentionStoreDump:
     OUTPUT_NODE  = True
 
     def dump(self, output_path, include_full_maps):
-        store = AttentionStore.get()
+        reg = get_registry()
+
+        h = reg._cur_attn or reg.create("default")
+
+        reg.switch_attn(h)
+
+        store = AttentionStore()
 
         def _serialize(src):
             return {
@@ -61,7 +67,10 @@ class LTXAttentionStoreLoad:
         if not os.path.isfile(input_path):
             raise FileNotFoundError(f"[LTXProfiler/Load] File not found: {input_path}")
         payload = torch.load(input_path, map_location="cpu", weights_only=False)
-        store   = AttentionStore.get()
+        reg = get_registry()
+        h = reg._cur_attn or reg.create('default')
+        reg.switch_attn(h)
+        store = AttentionStore()
         if not merge:
             store.sa  = payload.get("sa",  {})
             store.ca  = payload.get("ca",  {})
@@ -96,7 +105,10 @@ class LTXQKVDump:
     OUTPUT_NODE  = True
 
     def dump(self, output_path):
-        store = QKVStore.get()
+        reg = get_registry()
+        h = reg._cur_qkv or reg.create_qkv('default')
+        reg.switch_qkv(h)
+        store = QKVStore()
         torch.save({"data": store.data, "cfg": store.cfg}, output_path)
         print(f"[LTXProfiler/QKV] Dump → {output_path}")
         return (output_path,)
@@ -121,7 +133,10 @@ class LTXQKVLoad:
         if not os.path.isfile(input_path):
             raise FileNotFoundError(f"[LTXProfiler/QKVLoad] File not found: {input_path}")
         payload = torch.load(input_path, map_location="cpu", weights_only=False)
-        store   = QKVStore.get()
+        reg = get_registry()
+        h = reg._cur_qkv or reg.create_qkv('default')
+        reg.switch_qkv(h)
+        store = QKVStore()
         if not merge:
             store.reset()
             store.data = payload["data"]

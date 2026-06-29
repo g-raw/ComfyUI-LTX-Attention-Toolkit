@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ..core.stores    import AttentionStore
+from ..core.stores    import AttentionStore, get_registry
 from ..utils.graphics import apply_colormap_batch, add_grid_lines
 
 
@@ -144,7 +144,16 @@ class LTXAttentionZoneAnalysis:
                 aggregate_time, mask_threshold,
                 colormap, cell_size, top_k):
 
-        store = AttentionStore.get()
+        reg = get_registry()
+
+
+        h = reg._cur_attn or reg.create('default')
+
+
+        reg.switch_attn(h)
+
+
+        store = AttentionStore()
         src   = store.sa if attn_type == "sa" else store.ca
 
         if not src:

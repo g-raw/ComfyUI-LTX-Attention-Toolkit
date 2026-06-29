@@ -2,7 +2,7 @@ from __future__ import annotations
 import types
 import warnings
 
-from ..core.stores      import AttentionStore, QKVStore
+from ..core.stores      import get_registry, AttentionStore, QKVStore
 from ..core.hooks       import install_hook
 from ..core.model_patch import wrap_diffusion_model, unwrap_diffusion_model
 from ..utils.helpers    import parse_int_set, reset_call_count
@@ -21,15 +21,16 @@ class LTXAttentionCaptureSetup:
             "target_blocks":   ("STRING",  {"default": "0,8,16,24,32,40,47"}),
             "capture_steps":   ("STRING",  {"default": "all"}),
             "reset_store":     ("BOOLEAN", {"default": True}),
+            "store_name":      ("STRING",  {"default": ""}),
         }}
 
-    RETURN_TYPES = ("MODEL",)
-    RETURN_NAMES = ("patched_model",)
+    RETURN_TYPES = ("MODEL", "STORE_HANDLE")
+    RETURN_NAMES = ("patched_model", "store_handle")
     FUNCTION     = "setup"
     CATEGORY     = "g_raw/LTX/Profiler"
 
     def setup(self, model, capture_sa, capture_ca, store_full_maps,
-              map_downsample, target_blocks, capture_steps, reset_store):
+              map_downsample, target_blocks, capture_steps, reset_store, store_name):
 
         # Validate reset_store is a boolean
         if not isinstance(reset_store, (bool, int)):
@@ -49,11 +50,14 @@ class LTXAttentionCaptureSetup:
         parsed_blocks = parse_int_set(target_blocks, range(48)) or set(range(48))
         parsed_steps  = parse_int_set(capture_steps)
 
-        store = AttentionStore.get()
+        # Create/use named store via StoreRegistry
+        reg = get_registry()
+        handle = reg.create(store_name if store_name else None)
+        inst = reg._get_attn(handle)
         if reset_store:
-            store.reset()
+            inst.reset_data()
 
-        store.cfg = {
+        inst.cfg = {
             "capture_sa":      capture_sa,
             "capture_ca":      capture_ca,
             "store_full_maps": store_full_maps,
@@ -66,15 +70,16 @@ class LTXAttentionCaptureSetup:
         patched = model.clone()
         dm      = patched.model.diffusion_model
         unwrap_diffusion_model(dm)
-        wrap_diffusion_model(dm, store.cfg)
+        wrap_diffusion_model(dm, inst.cfg)
 
         print(
             f"[LTXProfiler] CaptureSetup\n"
             f"  SA={capture_sa} CA={capture_ca} full_maps={store_full_maps}\n"
             f"  Blocks : {sorted(parsed_blocks)}\n"
-            f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}"
+            f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}\n"
+            f"  Store : {handle}"
         )
-        return (patched,)
+        return (patched, handle)
 
 
 class LTXQKVCapture:
@@ -89,25 +94,29 @@ class LTXQKVCapture:
             "capture_sa":    ("BOOLEAN", {"default": True}),
             "capture_ca":    ("BOOLEAN", {"default": False}),
             "reset_store":   ("BOOLEAN", {"default": True}),
+            "store_name":    ("STRING",  {"default": ""}),
         }}
 
-    RETURN_TYPES = ("MODEL",)
-    RETURN_NAMES = ("capture_model",)
+    RETURN_TYPES = ("MODEL", "QKV_STORE_HANDLE")
+    RETURN_NAMES = ("capture_model", "qkv_handle")
     FUNCTION     = "setup"
     CATEGORY     = "g_raw/LTX/Profiler"
 
     def setup(self, model, target_blocks, target_heads,
-              capture_steps, capture_sa, capture_ca, reset_store):
+              capture_steps, capture_sa, capture_ca, reset_store, store_name):
 
         parsed_blocks = parse_int_set(target_blocks, range(48)) or set(range(48))
         parsed_heads  = parse_int_set(target_heads)
         parsed_steps  = parse_int_set(capture_steps)
 
-        qkv_store = QKVStore.get()
+        # Create/use named QKV store via StoreRegistry
+        reg = get_registry()
+        qkv_handle = reg.create_qkv(store_name if store_name else None)
+        qkv_inst = reg._get_qkv(qkv_handle)
         if reset_store:
-            qkv_store.reset()
+            qkv_inst.reset_data()
 
-        qkv_store.cfg = {
+        qkv_inst.cfg = {
             "target_blocks": parsed_blocks,
             "target_heads":  parsed_heads,
             "capture_steps": parsed_steps,
@@ -185,6 +194,7 @@ class LTXQKVCapture:
             f"[LTXProfiler] QKVCapture\n"
             f"  Blocks : {sorted(parsed_blocks)}\n"
             f"  Heads : {'all' if parsed_heads is None else sorted(parsed_heads)}\n"
-            f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}"
+            f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}\n"
+            f"  Store : {qkv_handle}"
         )
-        return (patched,)
+        return (patched, qkv_handle)

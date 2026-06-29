@@ -7,7 +7,8 @@ import torch.nn.functional as F
 
 logger = logging.getLogger("ltx_profiler")
 
-from ..core.stores   import AttentionStore, QKVStore
+from ..core.stores   import (
+    AttentionStore, QKVStore, get_current_attn, get_current_qkv, get_registry)
 from ..utils.helpers import increment_call_count, get_call_counts
 
 _ORIGINAL_OPT_ATTN        = None
@@ -103,7 +104,10 @@ def _make_full_hook(original_fn):
 
         # ── 1. Profiling ────────────────────────────────────────────────────
         if to.get("_profiler_block_idx") is not None:
-            store = AttentionStore.get()
+            reg = get_registry()
+            h = reg._cur_attn or reg.create("default")
+            reg.switch_attn(h)
+            store = AttentionStore()
             if store.cfg:
                 capture_sa = to.get("_profiler_capture_sa", True)
                 capture_ca = to.get("_profiler_capture_ca", True)
@@ -157,7 +161,10 @@ def _make_full_hook(original_fn):
             capture_sa = to.get("_qkv_capture_sa", True)
             capture_ca = to.get("_qkv_capture_ca", False)
             if (is_sa and capture_sa) or (is_ca and capture_ca):
-                qkv_store = QKVStore.get()
+                reg = get_registry()
+                h = reg._cur_qkv or reg.create_qkv('default')
+                reg.switch_qkv(h)
+                qkv_store = QKVStore()
                 if qkv_store.cfg:
                     try:
                         qkv_store.record(

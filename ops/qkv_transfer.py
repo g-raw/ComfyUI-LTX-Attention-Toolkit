@@ -88,8 +88,11 @@ def apply_qkv_transfer(q, k, v, heads, cfg,
             h_end   = h_start + D_head
 
             if use_map:
-                from ..core.stores import AttentionStore
-                attn_store = AttentionStore.get()
+                from ..core.stores import AttentionStore, get_registry
+                reg = get_registry()
+                h = reg._cur_attn or reg.create('default')
+                reg.switch_attn(h)
+                attn_store = AttentionStore()
                 try:
                     src = attn_store.sa if attn_type == "sa" else attn_store.ca
                     fm  = src[block_idx][src_step]["map"][h_idx].float()
