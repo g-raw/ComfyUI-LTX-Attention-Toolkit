@@ -28,7 +28,7 @@ keypoint tracking and cross-modal (audio↔video) dynamics.
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/YOUR_USERNAME/ltx-attention-profiler
+git clone https://github.com/g-raw/ComfyUI-LTX-Attention-Toolkit.git
 ```
 
 No extra dependencies beyond what ComfyUI already provides
