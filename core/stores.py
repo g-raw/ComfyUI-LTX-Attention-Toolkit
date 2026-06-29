@@ -76,6 +76,27 @@ class StoreRegistry:
             self._cur_attn = name
         return name
 
+    def create_and_get_attn(self, name: Optional[str] = None) -> _AttnInst:
+        """Atomic create + return instance — no race condition between create and retrieval."""
+        with self._lock:
+            if not name:
+                h = f"store_{id(self._attn)}"
+                i = 2
+                while h in self._attn:
+                    h = f"store_{id(self._attn)}_{i}"
+                    i += 1
+                name = h
+            else:
+                base = name
+                i = 2
+                while name in self._attn:
+                    name = f"{base}_{i}"
+                    i += 1
+            inst = _AttnInst(name)
+            self._attn[name] = inst
+            self._cur_attn = name
+        return inst
+
     def create_qkv(self, name: Optional[str] = None) -> str:
         """Create a new named QKVStore. Returns the handle."""
         with self._lock:
@@ -96,6 +117,27 @@ class StoreRegistry:
             self._qkv[name] = inst
             self._cur_qkv = name
         return name
+
+    def create_and_get_qkv(self, name: Optional[str] = None) -> _QKVInst:
+        """Atomic create + return instance — no race condition between create and retrieval."""
+        with self._lock:
+            if not name:
+                h = f"qkv_{id(self._qkv)}"
+                i = 2
+                while h in self._qkv:
+                    h = f"qkv_{id(self._qkv)}_{i}"
+                    i += 1
+                name = h
+            else:
+                base = name
+                i = 2
+                while name in self._qkv:
+                    name = f"{base}_{i}"
+                    i += 1
+            inst = _QKVInst(name)
+            self._qkv[name] = inst
+            self._cur_qkv = name
+        return inst
 
     def switch_attn(self, handle: str):
         """Set current AttentionStore by handle. Raises KeyError if not found."""

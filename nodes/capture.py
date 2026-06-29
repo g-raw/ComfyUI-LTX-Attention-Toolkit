@@ -50,12 +50,13 @@ class LTXAttentionCaptureSetup:
         parsed_blocks = parse_int_set(target_blocks, range(48)) or set(range(48))
         parsed_steps  = parse_int_set(capture_steps)
 
-        # Create/use named store via StoreRegistry
+        # Create/use named store via StoreRegistry (atomic to avoid race)
         reg = get_registry()
-        handle = reg.create(store_name if store_name else None)
-        inst = reg._get_attn(handle)
+        inst = reg.create_and_get_attn(store_name if store_name else None)
         if reset_store:
             inst.reset_data()
+
+        handle = inst.name
 
         inst.cfg = {
             "capture_sa":      capture_sa,
@@ -109,10 +110,10 @@ class LTXQKVCapture:
         parsed_heads  = parse_int_set(target_heads)
         parsed_steps  = parse_int_set(capture_steps)
 
-        # Create/use named QKV store via StoreRegistry
+        # Create/use named QKV store via StoreRegistry (atomic to avoid race)
         reg = get_registry()
-        qkv_handle = reg.create_qkv(store_name if store_name else None)
-        qkv_inst = reg._get_qkv(qkv_handle)
+        qkv_inst = reg.create_and_get_qkv(store_name if store_name else None)
+        qkv_handle = qkv_inst.name
         if reset_store:
             qkv_inst.reset_data()
 

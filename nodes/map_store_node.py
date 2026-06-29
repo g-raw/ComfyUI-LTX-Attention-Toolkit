@@ -52,10 +52,10 @@ class LTXAttentionMapStore:
 
         target_call_n  = 0 if attn_type == "sa" else 1
 
-        # ── Create / switch to named AttentionStore via registry ─────────────
+        # ── Create / switch to named AttentionStore via registry (atomic) ────
         reg = get_registry()
-        handle = reg.create(store_name or None)
-        store = reg._get_attn(handle)
+        store = reg.create_and_get_attn(store_name or None)
+        handle = store.name
         if reset_store:
             store.reset_data()
         store.cfg = {

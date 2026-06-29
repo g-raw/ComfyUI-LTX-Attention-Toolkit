@@ -21,12 +21,10 @@ class LTXAttentionStoreDump:
     OUTPUT_NODE  = True
 
     def dump(self, output_path, include_full_maps):
+        # Auto-create 'default' store if none exists
         reg = get_registry()
-
-        h = reg._cur_attn or reg.create("default")
-
-        reg.switch_attn(h)
-
+        if not reg._cur_attn:
+            reg.create("default")
         store = AttentionStore()
 
         def _serialize(src):

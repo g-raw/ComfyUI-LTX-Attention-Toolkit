@@ -104,9 +104,6 @@ def _make_full_hook(original_fn):
 
         # ── 1. Profiling ────────────────────────────────────────────────────
         if to.get("_profiler_block_idx") is not None:
-            reg = get_registry()
-            h = reg._cur_attn or reg.create("default")
-            reg.switch_attn(h)
             store = AttentionStore()
             if store.cfg:
                 capture_sa = to.get("_profiler_capture_sa", True)
@@ -161,9 +158,6 @@ def _make_full_hook(original_fn):
             capture_sa = to.get("_qkv_capture_sa", True)
             capture_ca = to.get("_qkv_capture_ca", False)
             if (is_sa and capture_sa) or (is_ca and capture_ca):
-                reg = get_registry()
-                h = reg._cur_qkv or reg.create_qkv('default')
-                reg.switch_qkv(h)
                 qkv_store = QKVStore()
                 if qkv_store.cfg:
                     try:
