@@ -284,16 +284,33 @@ Reads both stores live from the registry by handle — to compare a dumped
 | `attn_type` | ENUM | `sa` / `ca` |
 | `metric` | ENUM | `entropy` / `temporal` / `spatial` / `sink` |
 | `step_idx` | INT | `-1` averages across all captured steps |
-| `top_k` | INT | How many `(block, head)` pairs to list, ranked by `|A - B|` |
-| `norm_percentile` | FLOAT | Clip the heatmap color scale at this percentile of `\|diff\|` (default 0.98) so a few outlier cells don't wash the rest out to white — `1.0` uses the true max |
+| `top_k` | INT | How many `(block, head)` pairs to list, ranked by `\|diff_mode score\|` |
+| `norm_percentile` | FLOAT | Clip the heatmap color scale at this percentile of the diff_mode score (default 0.98) so a few outlier cells don't wash the rest out to white — `1.0` uses the true max |
 | `colormap` | ENUM | `diverging` (default, 0 = black) / `coolwarm` (0 = near-white) / `viridis` / `inferno` |
+| `diff_mode` | ENUM | `absolute` / `relative_pct` / `zscore` — see below |
 
-**Sign convention:** `diff = A - B` — positive (red) means A's value is
-higher, negative (blue) means B's is higher. `stats_text` prints which
-handle is A and which is B so this is never ambiguous from the image
-alone. The output IMAGE has a numeric colorbar stamped along the bottom
-(`-clip_val` / `0` / `+clip_val`) so the actual magnitude is readable,
-not just the direction.
+**Sign convention:** raw diff `= A - B` — positive (red) means A's value
+is higher, negative (blue) means B's is higher. `stats_text` prints
+which handle is A and which is B so this is never ambiguous from the
+image alone. The output IMAGE has a numeric colorbar stamped along the
+bottom (`-clip_val` / `0` / `+clip_val`, in `diff_mode`'s units) so the
+actual magnitude is readable, not just the direction.
+
+**Why `diff_mode` matters:** the four metrics don't share a scale —
+`sink` is a bounded probability-like quantity while `temporal`/`spatial`
+are unnormalized raw scores that can range much wider. A raw `A - B` of
+similar magnitude can mean "huge proportional change" on one metric and
+"noise" on another, so don't compare raw diffs across metrics directly.
+
+| Mode | Formula | Use for |
+|---|---|---|
+| `absolute` (default) | `A - B`, in the metric's own units | Looking at one metric in isolation |
+| `relative_pct` | `(A - B) / max(\|A\|, \|B\|) * 100` | "% change" — comparable in spirit across metrics |
+| `zscore` | `(A - B) / std(A and B combined)` | Diff in units of that metric's own spread — the most apples-to-apples way to ask whether one metric moved proportionally more than another |
+
+`stats_text` also reports `min`/`max` (alongside `mean`/`std`) for A and
+B separately *before* any diffing, so you can see each metric's
+intrinsic value range up front.
 
 Blocks are aligned by their actual index (not column position), so the
 two runs don't need identical `target_blocks`. Outputs a diff heatmap

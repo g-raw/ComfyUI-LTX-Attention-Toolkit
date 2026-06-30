@@ -54,11 +54,19 @@ class LTXAttentionCompareRuns:
                                       "instead of coolwarm's near-white midpoint."}),
             "cell_size":  ("INT",    {"default": 16, "min": 4, "max": 64}),
             "top_k":      ("INT",    {"default": 15, "min": 1, "max": 1536,
-                           "tooltip": "How many (block, head) pairs to list, ranked by |A - B|."}),
+                           "tooltip": "How many (block, head) pairs to list, ranked by the diff_mode score."}),
             "norm_percentile": ("FLOAT", {"default": 0.98, "min": 0.5, "max": 1.0, "step": 0.01,
-                           "tooltip": "Clip |diff| beyond this percentile before mapping to color, "
-                                      "so a few outlier cells don't wash out the rest of the heatmap "
-                                      "to white. 1.0 = no clipping (use the true max)."}),
+                           "tooltip": "Clip the diff_mode score beyond this percentile before mapping "
+                                      "to color, so a few outlier cells don't wash out the rest of the "
+                                      "heatmap to white. 1.0 = no clipping (use the true max)."}),
+            "diff_mode":  (["absolute", "relative_pct", "zscore"], {"default": "absolute",
+                           "tooltip": "absolute: A - B, in the metric's own units. Not comparable "
+                                      "across metrics with different intrinsic scales (e.g. sink in "
+                                      "[0,1] vs raw temporal/spatial scores).\n"
+                                      "relative_pct: (A-B) / max(|A|,|B|) * 100 -- % change, scale-free.\n"
+                                      "zscore: (A-B) / std(A and B combined) -- diff in units of the "
+                                      "metric's own spread, the most apples-to-apples way to ask "
+                                      "whether one metric moved proportionally more than another."}),
         }}
 
     RETURN_TYPES = ("IMAGE", "STRING")
@@ -102,7 +110,7 @@ class LTXAttentionCompareRuns:
 
     def compare(self, store_handle_a, store_handle_b,
                 attn_type, metric, step_idx, colormap, cell_size, top_k,
-                norm_percentile):
+                norm_percentile, diff_mode):
         reg   = get_registry()
         run_a = self._load_run(store_handle_a, reg)
         run_b = self._load_run(store_handle_b, reg)
@@ -124,9 +132,27 @@ class LTXAttentionCompareRuns:
         mh = min(mat_a.shape[0], mat_b.shape[0])
         mat_a, mat_b = mat_a[:mh], mat_b[:mh]
 
-        diff      = mat_a - mat_b
-        clip_val  = max(float(np.percentile(np.abs(diff), norm_percentile * 100)), 1e-8)
-        diff_clip = np.clip(diff, -clip_val, clip_val)
+        eps      = 1e-8
+        raw_diff = mat_a - mat_b
+
+        if diff_mode == "relative_pct":
+            denom    = np.maximum(np.abs(mat_a), np.abs(mat_b)) + eps
+            score    = raw_diff / denom * 100.0
+            unit     = "%"
+            score_fmt = "{:+.1f}%"
+        elif diff_mode == "zscore":
+            combined_std = float(np.concatenate([mat_a.ravel(), mat_b.ravel()]).std())
+            denom    = combined_std + eps
+            score    = raw_diff / denom
+            unit     = "σ"
+            score_fmt = "{:+.3f}σ"
+        else:
+            score     = raw_diff
+            unit      = "(raw units)"
+            score_fmt = "{:+.4f}"
+
+        clip_val  = max(float(np.percentile(np.abs(score), norm_percentile * 100)), 1e-8)
+        diff_clip = np.clip(score, -clip_val, clip_val)
         diff_norm = (diff_clip / clip_val) * 0.5 + 0.5
         colored   = apply_colormap_batch(diff_norm[np.newaxis], colormap)[0]
         out_h, out_w = mh * cell_size, len(common_blocks) * cell_size
@@ -138,29 +164,33 @@ class LTXAttentionCompareRuns:
         img_np   = vstack_padded([img_np, colorbar])
         out      = torch.from_numpy(img_np).unsqueeze(0).clamp(0.0, 1.0)
 
-        # ── Ranked (block, head) table by |A - B| ─────────────────────────
-        flat_idx = np.argsort(np.abs(diff).ravel())[::-1][:top_k]
+        # ── Ranked (block, head) table by |score| ──────────────────────────
+        flat_idx = np.argsort(np.abs(score).ravel())[::-1][:top_k]
         rank_lines = []
         for rank, fi in enumerate(flat_idx, start=1):
-            h, col = np.unravel_index(fi, diff.shape)
+            h, col = np.unravel_index(fi, score.shape)
             blk    = common_blocks[col]
             rank_lines.append(
                 f"#{rank:2d}  block={blk:2d} head={h:2d}  "
-                f"diff(A-B)={diff[h,col]:+.4f}  (A={mat_a[h,col]:.4f} B={mat_b[h,col]:.4f})"
+                f"score={score_fmt.format(score[h,col])}  "
+                f"(raw diff={raw_diff[h,col]:+.4f}, A={mat_a[h,col]:.4f}, B={mat_b[h,col]:.4f})"
             )
 
         stats  = (
             f"A = '{store_handle_a}'  |  B = '{store_handle_b}'\n"
             f"diff = A - B  →  positive (red) = A > B, negative (blue) = B > A\n"
+            f"diff_mode = {diff_mode}, units = {unit}\n"
             f"Metric: {metric} ({attn_type}) | Step: {step_idx} | "
             f"Blocks compared: {common_blocks}\n"
-            f"A: mean={mat_a.mean():.4f} std={mat_a.std():.4f}\n"
-            f"B: mean={mat_b.mean():.4f} std={mat_b.std():.4f}\n"
-            f"Diff: mean={diff.mean():.4f} std={diff.std():.4f}\n"
-            f"Max A>B: {diff.max():.4f} | Max B>A: {(-diff).max():.4f}\n"
-            f"Heatmap color scale clipped at ±{clip_val:.4f} "
-            f"({norm_percentile*100:.0f}th percentile of |diff|), "
+            f"A: mean={mat_a.mean():.4f} std={mat_a.std():.4f} "
+            f"min={mat_a.min():.4f} max={mat_a.max():.4f}\n"
+            f"B: mean={mat_b.mean():.4f} std={mat_b.std():.4f} "
+            f"min={mat_b.min():.4f} max={mat_b.max():.4f}\n"
+            f"Raw diff (A-B): mean={raw_diff.mean():.4f} std={raw_diff.std():.4f}\n"
+            f"Max A>B: {raw_diff.max():.4f} | Max B>A: {(-raw_diff).max():.4f}\n"
+            f"Heatmap color scale clipped at ±{clip_val:.4f} {unit} "
+            f"({norm_percentile*100:.0f}th percentile of |{diff_mode}|), "
             f"see colorbar at the bottom of the image\n\n"
-            f"Top {min(top_k, diff.size)} by |A-B|:\n" + "\n".join(rank_lines)
+            f"Top {min(top_k, score.size)} by |{diff_mode}|:\n" + "\n".join(rank_lines)
         )
         return (out, stats)
