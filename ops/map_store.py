@@ -1,17 +1,41 @@
 from __future__ import annotations
 import torch
 
+from ..core.stores   import _AttnInst
 from ..utils.helpers import reset_call_count
 
 
-def make_map_store_callback(map_data: dict, parsed_heads,
-                             store_mode: str, full_block_set: set,
-                             latent_frames: int, latent_height: int,
-                             latent_width: int):
+# ── Entry format helper ──────────────────────────────────────────────────────
+
+def _ms_entry_to_dict(key_map, query_map, timestep, full=None):
+    """Convert a single head's reduced maps into the same entry shape used by SetupCapture."""
+    entry = {
+        "key_map":   key_map.float(),
+        "query_map": query_map.float(),
+        "timestep":  float(timestep),
+    }
+    if full is not None:
+        entry["full"] = full.float()
+    return entry
+
+
+# ── Callback factory (writes to map_data + optionally to registry store) ─────
+
+def make_map_store_callback(
+    map_data: dict,
+    parsed_heads,
+    store_mode: str,
+    full_block_set: set,
+    latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    target_inst: "_AttnInst | None" = None,   # ← write to registry store too
+):
     """
     Returns the callback store_map(attn_map, block_idx, head_idx_arg,
                                     step_idx, timestep, num_frames)
-    which writes into map_data.
+    which writes into *map_data* and, when *target_inst* is provided,
+    also records an entry in target_inst.sa/attn_type matching SetupCapture's format.
     """
     P = latent_height * latent_width
 
@@ -50,27 +74,52 @@ def make_map_store_callback(map_data: dict, parsed_heads,
 
         for h_idx in head_range:
             W         = W_all[h_idx]
-            entry     = {
-                "key_map":   to_spatial(W.mean(dim=0).float()),
-                "query_map": to_spatial(W.mean(dim=1).float()),
-                "timestep":  timestep,
-            }
+            key_map   = to_spatial(W.mean(dim=0).float())
+            query_map = to_spatial(W.mean(dim=1).float())
+            entry     = _ms_entry_to_dict(key_map, query_map, timestep)
             if use_full:
-                entry["full"] = W
+                entry["full"] = W.float()
 
+            # 1 ── Write into caller's local map_data (backward compat) ───────
             map_data.setdefault(block_idx, {}) \
                     .setdefault(step_idx, {})[h_idx] = entry
+
+            # 2 ── Also write to registry store so visualizers read it via handle ──
+            if target_inst is not None:
+                sa_key   = f"mapstore_{block_idx}"
+                ms_step  = target_inst.get_ms_step_counter(sa_key)
+
+                store_dict = target_inst.sa     # MapStore uses sa for both types
+                if block_idx not in store_dict:
+                    store_dict[block_idx] = {}
+                entry_reg = {
+                    "map":       W.half(),       # full attention map (same as SetupCapture)
+                    "key_map":   key_map,
+                    "query_map": query_map,
+                    "entropy":   torch.zeros(H_heads),  # dummy — entropy not computed by MapStore
+                    "timestep":  float(timestep),
+                    "step_idx":  ms_step,
+                }
+                store_dict[block_idx][ms_step] = entry_reg
 
     return store_map
 
 
-def build_map_store_forward(original_forward, parsed_blocks, parsed_steps,
-                             target_call_n, store_map_cb, parsed_heads,
-                             step_counters, num_frames_ref):
-    """
-    Returns a patched_forward which injects the MapStore callback
-    into transformer_options via the block hook.
-    """
+# ── Selective forward builder (used by map_store_node.py) ─────────────────────
+
+def make_map_store_patched_forward(
+    original_forward,
+    parsed_blocks: set[int],
+    parsed_steps,
+    target_call_n: int,
+    store_map_cb,
+    parsed_heads,
+    step_counters: dict[int, int],
+    num_frames_ref: list[float],
+    target_inst: "_AttnInst | None",         # ← same instance used by callback
+):
+    """Build a patched _forward that injects MapStore metadata per block."""
+
     def patched_forward(self_dm, x, timestep, context, attention_mask,
                         frame_rate=25, transformer_options={},
                         keyframe_idxs=None, **kwargs):
@@ -114,7 +163,8 @@ def build_map_store_forward(original_forward, parsed_blocks, parsed_steps,
                     if existing_h and not getattr(existing_h, "_is_ms_hook", False):
                         return existing_h(new_args, orig)
                     return orig["original_block"](new_args)
-                hook._is_ms_hook = True
+                hook._is_ms_hook   = True
+                hook._is_profiler_hook = False       # non-profiler patch — preserved on unwrap
                 return hook
 
             dit_replace[("double_block", blk_idx)] = make_hook(

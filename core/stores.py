@@ -10,21 +10,30 @@ import torch.nn.functional as F
 
 class _AttnInst:
     """Data container for one named AttentionStore."""
-    __slots__ = ("name", "sa", "ca", "_step_counter", "cfg", "_save_callback", "_parsed_heads")
+    __slots__ = ("name", "sa", "ca", "_step_counter", "_ms_step_counter", "cfg", "_save_callback", "_parsed_heads")
 
     def __init__(self, name: str):
-        self.name         = name
-        self.sa           = {}   # block_idx → step_idx → entry
-        self.ca           = {}
-        self._step_counter: Dict[str, int] = {}
-        self.cfg          = dict()
-        self._save_callback = None
-        self._parsed_heads  = None
+        self.name             = name
+        self.sa               = {}   # block_idx → step_idx → entry
+        self.ca               = {}
+        self._step_counter    : Dict[str, int] = {}  # key like "sa_N" or "ca_N"
+        self._ms_step_counter : Dict[str, int] = {}  # MapStore-specific counter (key like "mapstore_N")
+        self.cfg              = dict()
+        self._save_callback   = None
+        self._parsed_heads    = None
 
     def reset_data(self):
         self.sa.clear()
         self.ca.clear()
         self._step_counter.clear()
+        self._ms_step_counter.clear()
+
+    def get_ms_step_counter(self, key: str) -> int:
+        """Atomically increment and return the MS step counter for *key*."""
+        n = self._ms_step_counter.get(key, 0)
+        n += 1
+        self._ms_step_counter[key] = n
+        return n
 
 
 class _QKVInst:
@@ -80,6 +89,7 @@ class StoreRegistry:
         """Atomic create + return instance — no race condition between create and retrieval."""
         with self._lock:
             if not name:
+                # Each auto-name is unique (uses id-based counter) so no collision between setups
                 h = f"store_{id(self._attn)}"
                 i = 2
                 while h in self._attn:
