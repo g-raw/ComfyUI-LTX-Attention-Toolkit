@@ -16,10 +16,17 @@ class LTXAttentionCaptureSetup:
             "model":           ("MODEL",),
             "capture_sa":      ("BOOLEAN", {"default": True}),
             "capture_ca":      ("BOOLEAN", {"default": True}),
-            "store_full_maps": ("BOOLEAN", {"default": False}),
-            "map_downsample":  ("INT",     {"default": 1, "min": 1, "max": 16}),
             "target_blocks":   ("STRING",  {"default": "0,8,16,24,32,40,47"}),
+            "target_heads":    ("STRING",  {"default": "all"}),
             "capture_steps":   ("STRING",  {"default": "all"}),
+            "store_mode":      (["reduced", "full_fp16", "hybrid"],
+                               {"default": "reduced",
+                                "tooltip": "reduced: metrics + key/query maps only\n"
+                                           "full_fp16: + full attention map for every target block\n"
+                                           "hybrid: full map only for full_blocks, reduced elsewhere"}),
+            "full_blocks":     ("STRING",  {"default": "8,16,24,32,40",
+                               "tooltip": "Blocks stored at full resolution in hybrid mode."}),
+            "map_downsample":  ("INT",     {"default": 1, "min": 1, "max": 64}),
             "reset_store":     ("BOOLEAN", {"default": True}),
             "store_name":      ("STRING",  {"default": ""}),
         }}
@@ -29,8 +36,9 @@ class LTXAttentionCaptureSetup:
     FUNCTION     = "setup"
     CATEGORY     = "g_raw/LTX/Profiler"
 
-    def setup(self, model, capture_sa, capture_ca, store_full_maps,
-              map_downsample, target_blocks, capture_steps, reset_store, store_name):
+    def setup(self, model, capture_sa, capture_ca, target_blocks, target_heads,
+              capture_steps, store_mode, full_blocks, map_downsample,
+              reset_store, store_name):
 
         # Validate reset_store is a boolean
         if not isinstance(reset_store, (bool, int)):
@@ -47,8 +55,14 @@ class LTXAttentionCaptureSetup:
             if parsed_steps_test is not None and len(parsed_steps_test) == 0:
                 raise ValueError(f"capture_steps '{capture_steps}' does not contain valid integers.")
 
-        parsed_blocks = parse_int_set(target_blocks, range(48)) or set(range(48))
-        parsed_steps  = parse_int_set(capture_steps)
+        valid_modes = ("reduced", "full_fp16", "hybrid")
+        if store_mode not in valid_modes:
+            raise ValueError(f"store_mode must be one of {valid_modes}, got '{store_mode}'")
+
+        parsed_blocks  = parse_int_set(target_blocks, range(48)) or set(range(48))
+        parsed_heads   = parse_int_set(target_heads)
+        parsed_steps   = parse_int_set(capture_steps)
+        full_block_set = {int(x.strip()) for x in full_blocks.split(",") if x.strip()}
 
         # Create/use named store via StoreRegistry (atomic to avoid race)
         reg = get_registry()
@@ -59,12 +73,14 @@ class LTXAttentionCaptureSetup:
         handle = inst.name
 
         inst.cfg = {
-            "capture_sa":      capture_sa,
-            "capture_ca":      capture_ca,
-            "store_full_maps": store_full_maps,
-            "map_downsample":  map_downsample,
-            "target_blocks":   parsed_blocks,
-            "capture_steps":   parsed_steps,
+            "capture_sa":    capture_sa,
+            "capture_ca":    capture_ca,
+            "target_blocks": parsed_blocks,
+            "target_heads":  parsed_heads,
+            "capture_steps": parsed_steps,
+            "store_mode":    store_mode,
+            "full_blocks":   full_block_set,
+            "map_downsample": map_downsample,
         }
 
         install_hook()
@@ -75,8 +91,10 @@ class LTXAttentionCaptureSetup:
 
         print(
             f"[LTXProfiler] CaptureSetup\n"
-            f"  SA={capture_sa} CA={capture_ca} full_maps={store_full_maps}\n"
-            f"  Blocks : {sorted(parsed_blocks)}\n"
+            f"  SA={capture_sa} CA={capture_ca} store_mode={store_mode}\n"
+            f"  Blocks : {sorted(parsed_blocks)}"
+            f"{' (full: '+str(sorted(full_block_set))+')' if store_mode=='hybrid' else ''}\n"
+            f"  Heads : {'all' if parsed_heads is None else sorted(parsed_heads)}\n"
             f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}\n"
             f"  Store : {handle}"
         )

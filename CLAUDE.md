@@ -27,9 +27,9 @@ utils/   ├── helpers.py  — parse helpers, call counter, resolve_entry
 ### Key design patterns
 
 - **Named store instances via StoreRegistry**: `get_registry()` returns the singleton registry managing named `_AttnInst` / `_QKVInst` containers. Proxy classes (`AttentionStore`, `QKVStore`) expose the current instance via property dispatch — auto-create "default" if none active. Data layout: `store[attn_type][block_idx][step_idx] = {"map": Tensor, "entropy": Tensor, ...}`.
-- **Universal attention hook** (`core/hooks.py:_make_full_hook`): Installed on both `optimized_attention` and `optimized_attention_masked. Priority order per call: (1) Profiling → AttentionStore, (2) MapStore callback, (3) QKV Capture → QKVStore, (4) QKV Transfer substitution, (5) Head Freeze map injection, (6) Normal pass-through.
+- **Universal attention hook** (`core/hooks.py:_make_full_hook`): Installed on both `optimized_attention` and `optimized_attention_masked. Priority order per call: (1) Profiling → AttentionStore, (2) QKV Capture → QKVStore, (3) QKV Transfer substitution, (4) Head Freeze map injection, (5) Normal pass-through.
 - **Block-level call counting** (`utils/helpers.py:increment_call_count`): Each transformer block makes 2 attention calls per step — call_n==0 is self-attention (SA), call_n==1 is cross-attention (CA). The hook uses thread-local counters keyed by `block_idx`.
-- **Diffusion model patching**: Nodes that need intervention wrap `diffusion_model._forward` via `types.MethodType`, inject `patches_replace["dit"]` into `transformer_options`, and delegate to the original. Use `wrap_diffusion_model()` / `unwrap_diffusion_model()` for setup nodes; use `make_simple_patched_forward()` or inline wrapping for intervention nodes.
+- **Diffusion model patching**: Nodes that need intervention wrap `diffusion_model._forward` via `types.MethodType`, inject `patches_replace["dit"]` into `transformer_options`, and delegate to the original. Use `wrap_diffusion_model()` / `unwrap_diffusion_model()` for setup nodes (auto-detects geometry: num_frames, latent_h, latent_w); intervention nodes (Freeze, QKVTransfer) hand-roll their own inline `patched_forward`.
 - **Patching chains**: Multiple patches can stack on the same block — each layer's hook stores `existing_hook` reference and forwards to it if present. Hooks are tagged with `_is_profiler_hook`, `_is_freeze_hook`, etc. to detect chain members.
 
 ## Token layout
@@ -42,25 +42,24 @@ Attention map `W: [H, Sq, Sk] fp16`. Key map = `W.mean(dim=1)` (what's looked at
 ## Nodes by category
 
 ### Capture
-- **LTX Attn — Setup Capture** (`nodes/capture.py:LTXAttentionCaptureSetup`): Patches model to capture attention maps + metrics. Most nodes depend on a prior setup run.
+- **LTX Attn — Setup Capture** (`nodes/capture.py:LTXAttentionCaptureSetup`): Patches model to capture attention metrics (entropy/temporal/spatial/sink) plus reduced key/query maps, and optionally full attention maps per `store_mode` (`reduced`/`full_fp16`/`hybrid` + `full_blocks`/`target_heads` RAM filters). Geometry (num_frames/latent_h/latent_w) is auto-detected — no manual dims. Most nodes depend on a prior setup run, read via the `STORE_HANDLE` string output (a separate later run — see hook architecture note below).
 - **LTX QKV — Capture Source** (`nodes/capture.py:LTXQKVCapture`): Captures raw Q/K/V tensors per-head.
 
 ### Visualization
 - **LTX Attn — Key Map** (`nodes/visualize.py:LTXAttentionKeyMap`): "What is being looked at?" — reduces query dim, reshapes keys to [F, H_lat, W_lat]. SA only.
 - **LTX Attn — Query Map** (`nodes/visualize.py:LTXAttentionQueryMap`): "Who is actively looking?" — reduces key dim, works for SA+CA.
 - **LTX Attn — Metrics Heatmap** (`nodes/visualize.py:LTXAttentionMetricsViz`): 2D heatmap [blocks × heads] for entropy/temporal/spatial/sink metrics. Returns IMAGE + stats string.
-- **LTX Attn — Grid Viz** (`nodes/visualize.py:LTXAttentionGridViz`): Full overview grid from ATTN_MAP_STORE. Supports frame modes: avg/all/sequence/specific frames. Normalize modes: global/per_cell/per_block/per_head.
+- **LTX Attn — Grid Viz** (`nodes/visualize.py:LTXAttentionGridViz`): Full overview grid read from a `store_handle`. Views: key_map/query_map/diff. Supports frame modes: avg/all/sequence/specific frames. Normalize modes: global/per_cell/per_block/per_head.
 - **LTX Attn — Timestep Evolution** (`nodes/evolution.py`): Line chart of metric vs denoising step per head.
 
 ### Intervention
-- **LTX Attn — Head Freeze** (`nodes/transfer.py:LTXAttentionHeadFreeze`): Locks attention map for a specific head from a pivot step. Requires prior capture with `store_full_maps=True`. Single head per instance.
-- **LTX QKV — Transfer** (`nodes/transfer.py:LTXQKVTransfer`): Injects Q/K/V from source generation into target. Supports multi-block, multi-head targeting. Modes: use_k+use_v (style), use_map (raw softmax), full QKV replace. `sim_filter` for content-preserving transfer via cosine similarity gating.
+- **LTX Attn — Head Freeze** (`nodes/transfer.py:LTXAttentionHeadFreeze`): Locks attention map for a specific head from a pivot step. Requires prior capture with `store_mode=full_fp16` (or `hybrid` for that block). Single head per instance. Optional `store_handle` to target a specific named store.
+- **LTX QKV — Transfer** (`nodes/transfer.py:LTXQKVTransfer`): Injects Q/K/V from source generation into target. Supports multi-block, multi-head targeting. Modes: use_k+use_v (style), use_map (raw softmax), full QKV replace. `sim_filter` for content-preserving transfer via cosine similarity gating. Optional `qkv_handle` to target a specific named QKV store.
 
 ### IO & Debug
-- **Store Dump/Load** (`nodes/io.py`): Save/load AttentionStore and QKVStore to `.pt` files.
+- **Store Dump/Load** (`nodes/io.py`): Save/load AttentionStore and QKVStore to `.pt` files. All four nodes take an optional `store_handle`/`qkv_handle` to target a specific named store instead of implicitly acting on whatever is "current" in the registry.
 - **LTX Attn — Compare Runs** (`nodes/utils.py`): Diff heatmap between two capture runs.
-- **Store Inspect nodes** (`nodes/inspect.py`): Print store contents for debugging.
-- **LTX Attn — Map Store** (`nodes/map_store_node.py`): Reduced/full/hybrid map storage callback for visualization nodes.
+- **Store Inspect nodes** (`nodes/inspect.py`): Print store contents for debugging (AttentionStore summary includes key/query map presence).
 - **LTX — Latent Dims** (`nodes/utils.py:LTXLatentDims`): Extract T/H/W from a LATENT tensor.
 
 ## Common development tasks

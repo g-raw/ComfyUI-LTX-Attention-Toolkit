@@ -44,7 +44,7 @@ def resolve_entry(src: dict, block_idx: int, step_idx: int, attn_type: str) -> d
         raise ValueError(f"Step {step_idx} not found. Available: {steps}")
     entry = block_data[step_idx]
     if entry.get("map") is None:
-        raise ValueError("No map. Re-run with store_full_maps=True.")
+        raise ValueError("No map. Re-run with store_mode=full_fp16 (or hybrid).")
     return entry
 
 

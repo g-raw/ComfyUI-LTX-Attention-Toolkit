@@ -21,6 +21,7 @@ class LTXAttentionHeadFreeze:
             "attn_type":          (["sa"],  {"default": "sa"}),
             "blend_weight":       ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0,
                                    "step": 0.05}),
+            "store_handle":       ("STRING", {"default": "", "placeholder": "select store..."}),
         }}
 
     RETURN_TYPES = ("MODEL",)
@@ -29,16 +30,13 @@ class LTXAttentionHeadFreeze:
     CATEGORY     = "g_raw/LTX/Profiler"
 
     def apply_freeze(self, model, block_idx, head_idx, freeze_from_step,
-                     freeze_step_source, attn_type, blend_weight):
+                     freeze_step_source, attn_type, blend_weight, store_handle):
 
         reg = get_registry()
-
-
-        h = reg._cur_attn or reg.create("default")
-
-
-        reg.switch_attn(h)
-
+        if store_handle and store_handle.strip():
+            reg.switch_attn(store_handle)
+        elif not reg._cur_attn:
+            reg.switch_attn(reg.create("default"))
 
         store = AttentionStore()
         src   = store.sa if attn_type == "sa" else store.ca
@@ -52,7 +50,7 @@ class LTXAttentionHeadFreeze:
             )
         entry = src[block_idx][freeze_step_source]
         if entry.get("map") is None:
-            raise ValueError("[Freeze] No map. Re-run with store_full_maps=True.")
+            raise ValueError("[Freeze] No map. Re-run with store_mode=full_fp16 (or hybrid).")
 
         frozen_map    = entry["map"][head_idx].float()
         patched       = model.clone()
@@ -124,6 +122,7 @@ class LTXQKVTransfer:
             "sim_filter":         ("BOOLEAN", {"default": False}),
             "sim_threshold":      ("FLOAT",   {"default": 0.3,
                                    "min": -1.0, "max": 1.0, "step": 0.05}),
+            "qkv_handle":         ("STRING",  {"default": "", "placeholder": "select QKV store..."}),
         }}
 
     RETURN_TYPES = ("MODEL",)
@@ -165,7 +164,7 @@ class LTXQKVTransfer:
     def apply_transfer(self, model, attn_type, target_blocks, head_indices,
                        source_step, transfer_from_step, transfer_to_step,
                        blend, use_map, use_q, use_k, use_v,
-                       sim_filter, sim_threshold):
+                       sim_filter, sim_threshold, qkv_handle):
 
         if use_map:
             use_q = use_k = use_v = False
@@ -174,13 +173,10 @@ class LTXQKVTransfer:
             return (model,)
 
         reg = get_registry()
-
-
-        qh = reg._cur_qkv or reg.create_qkv("default")
-
-
-        reg.switch_qkv(qh)
-
+        if qkv_handle and qkv_handle.strip():
+            reg.switch_qkv(qkv_handle)
+        elif not reg._cur_qkv:
+            reg.switch_qkv(reg.create_qkv("default"))
 
         qkv_store = QKVStore()
         if not any(qkv_store.data[t] for t in qkv_store.data):

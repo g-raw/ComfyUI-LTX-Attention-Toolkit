@@ -226,7 +226,8 @@ class LTXAttentionGridViz:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "map_store":     ("ATTN_MAP_STORE",),
+            "store_handle":  ("STRING", {"default": "", "placeholder": "select store..."}),
+            "attn_type":     (["sa", "ca"], {"default": "sa"}),
             "view":          (["key_map","query_map","diff"], {"default": "key_map"}),
             "target_blocks": ("STRING", {"default": "all"}),
             "target_heads":  ("STRING", {"default": "all"}),
@@ -240,9 +241,6 @@ class LTXAttentionGridViz:
             "normalize":     (["global","per_cell","per_block","per_head"],
                              {"default": "per_cell"}),
             "draw_labels":   ("BOOLEAN", {"default": True}),
-            "latent_frames": ("INT",    {"default": 10, "min": 1, "max": 256}),
-            "latent_height": ("INT",    {"default": 11, "min": 1, "max": 256}),
-            "latent_width":  ("INT",    {"default": 20, "min": 1, "max": 256}),
         }}
 
     RETURN_TYPES = ("IMAGE", "STRING")
@@ -265,17 +263,27 @@ class LTXAttentionGridViz:
         except ValueError as e:
             raise ValueError(f"frame_mode '{s}' invalid: {e}")
 
-    def visualize(self, map_store, view, target_blocks, target_heads,
+    def visualize(self, store_handle, attn_type, view, target_blocks, target_heads,
                   step_idx, frame_mode, colormap, upsample, cell_padding,
-                  normalize, draw_labels, latent_frames, latent_height, latent_width):
+                  normalize, draw_labels):
+
+        if store_handle and store_handle.strip():
+            get_registry().switch_attn(store_handle)
+        store      = AttentionStore()
+        map_store  = store.sa if attn_type == "sa" else store.ca
 
         available_blocks = sorted(map_store.keys())
         if not available_blocks:
-            raise ValueError("[GridViz] map_store empty.")
+            raise ValueError("[GridViz] store empty — re-run Setup Capture "
+                              "and KSampler first, then type its store_handle here.")
 
         first_steps     = map_store[available_blocks[0]]
         first_step_key  = sorted(first_steps.keys())[0]
-        available_heads = sorted(first_steps[first_step_key].keys())
+        first_entry     = first_steps[first_step_key]
+        if first_entry.get("key_map") is None:
+            raise ValueError("[GridViz] no key_map/query_map in store entries.")
+        n_available_heads = first_entry["key_map"].shape[0]
+        available_heads    = list(range(n_available_heads))
 
         block_list = (available_blocks if target_blocks.strip().lower() == "all"
                       else [int(x.strip()) for x in target_blocks.split(",")
@@ -288,9 +296,12 @@ class LTXAttentionGridViz:
         if not head_list:  raise ValueError("[GridViz] no valid heads.")
 
         n_blocks, n_heads = len(block_list), len(head_list)
-        H_lat_ref = latent_height
-        W_lat_ref = latent_width
-        F_ref     = latent_frames
+        H_lat_ref, W_lat_ref, F_ref = 1, 1, 1
+
+        def _view_tensor(entry, h_idx):
+            if view == "diff":
+                return (entry["key_map"][h_idx] - entry["query_map"][h_idx]).float().numpy()
+            return entry[view][h_idx].float().numpy()
 
         # ── Extraction ────────────────────────────────────────────────────
         raw = {}
@@ -305,16 +316,16 @@ class LTXAttentionGridViz:
                 step_keys = sorted(steps.keys())
                 if step_idx == -1:
                     frames_list = [
-                        steps[sk][h_idx][view].float().numpy()
+                        _view_tensor(steps[sk], h_idx)
                         for sk in step_keys
-                        if h_idx in steps[sk] and view in steps[sk][h_idx]
+                        if h_idx < steps[sk]["key_map"].shape[0]
                     ]
                     data = (np.stack(frames_list).mean(0) if frames_list
                             else np.zeros((1, H_lat_ref, W_lat_ref), dtype=np.float32))
                 else:
                     sk   = step_idx if step_idx in steps else step_keys[-1]
-                    data = (steps[sk][h_idx][view].float().numpy()
-                            if h_idx in steps[sk] and view in steps[sk][h_idx]
+                    data = (_view_tensor(steps[sk], h_idx)
+                            if h_idx < steps[sk]["key_map"].shape[0]
                             else np.zeros((1, H_lat_ref, W_lat_ref), dtype=np.float32))
 
                 H_lat_ref = data.shape[1]

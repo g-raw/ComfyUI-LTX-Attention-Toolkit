@@ -53,12 +53,11 @@ def _make_full_hook(original_fn):
     """
     Universal hook — attached to optimized_attention and optimized_attention_masked.
     Manages in order:
-      1. Classic profiling     → AttentionStore
-      2. MapStore callback     → map_data via _ms_store_cb
-      3. QKV Capture           → QKVStore
-      4. QKV Transfer          → substitution Q/K/V
-      5. Head Freeze           → frozen map
-      6. Normal                → delegation
+      1. Profiling      → AttentionStore
+      2. QKV Capture    → QKVStore
+      3. QKV Transfer   → substitution Q/K/V
+      4. Head Freeze    → frozen map
+      5. Normal         → delegation
     """
 
     def hooked(q, k, v, heads, *args,
@@ -71,8 +70,7 @@ def _make_full_hook(original_fn):
 
         block_idx = to.get("_profiler_block_idx",
                     to.get("_freeze_block_idx",
-                    to.get("_qkv_block_idx",
-                    to.get("_ms_block_idx", None))))
+                    to.get("_qkv_block_idx", None)))
 
         if block_idx is None:
             return original_fn(q, k, v, heads, *args,
@@ -85,12 +83,7 @@ def _make_full_hook(original_fn):
         is_ca  = (call_n == 1)
 
         # ── Pre-compute attention map once if any op might need it ─────────
-        target_call_ms = to.get("_ms_target_call", 0)
-        ms_cb           = to.get("_ms_store_cb")
-        needs_attn_map = bool(
-            (to.get("_profiler_block_idx") is not None) or
-            (ms_cb is not None and call_n == target_call_ms)
-        )
+        needs_attn_map = to.get("_profiler_block_idx") is not None
         computed_attn_map = None
 
         if needs_attn_map:
@@ -122,38 +115,18 @@ def _make_full_hook(original_fn):
                             attn_weights      = attn_map,
                             num_frames        = to.get("_profiler_num_frames", 1),
                             patches_per_frame = to.get("_profiler_patches_per_frame", 1),
+                            latent_h          = to.get("_profiler_latent_h", 1),
+                            latent_w          = to.get("_profiler_latent_w", 1),
                         )
                     except Exception as e:
                         logger.error("[Profiling] block b=%d: %s", block_idx, e, exc_info=True)
-
-        # ── 2. MapStore callback ─────────────────────────────────────────────
-        ms_cb          = to.get("_ms_store_cb")
-        target_call_ms = to.get("_ms_target_call", 0)
-
-        if ms_cb is not None and call_n == target_call_ms:
-            try:
-                attn_map = computed_attn_map
-                if attn_map is None:
-                    B, Sq, HD = q.shape
-                    if HD % heads == 0:
-                        attn_map = _compute_attn_map(q, k, heads)
-                ms_cb(
-                    attn_map,
-                    block_idx,
-                    -1,                           # head_idx=-1 = all
-                    to.get("_ms_step_idx",   0),
-                    to.get("_ms_timestep",   0.0),
-                    to.get("_ms_n_frames",   1),
-                )
-            except Exception as e:
-                logger.error("[MapStore] block b=%d: %s", block_idx, e, exc_info=True)
 
         # Cleanup pre-computed attn map reference
         if computed_attn_map is not None:
             del computed_attn_map
             to.pop("_computed_attn_map", None)
 
-        # ── 3. QKV Capture ───────────────────────────────────────────────────
+        # ── 2. QKV Capture ───────────────────────────────────────────────────
         if to.get("_qkv_capture_active"):
             capture_sa = to.get("_qkv_capture_sa", True)
             capture_ca = to.get("_qkv_capture_ca", False)
@@ -170,7 +143,7 @@ def _make_full_hook(original_fn):
                     except Exception as e:
                         logger.error("[QKV] block b=%d: %s", block_idx, e, exc_info=True)
 
-        # ── 4. QKV Transfer ──────────────────────────────────────────────────
+        # ── 3. QKV Transfer ──────────────────────────────────────────────────
         if to.get("_qkv_transfer_active") and is_sa:
             return apply_qkv_transfer(
                 q, k, v, heads,
@@ -179,7 +152,7 @@ def _make_full_hook(original_fn):
                 attn_precision, transformer_options,
             )
 
-        # ── 5. Head Freeze ───────────────────────────────────────────────────
+        # ── 4. Head Freeze ───────────────────────────────────────────────────
         if to.get("_freeze_head_idx") is not None and is_sa:
             return apply_head_freeze(
                 q, k, v, heads,
@@ -190,7 +163,7 @@ def _make_full_hook(original_fn):
                 attn_precision, transformer_options,
             )
 
-        # ── 6. Normal ────────────────────────────────────────────────────────
+        # ── 5. Normal ────────────────────────────────────────────────────────
         return original_fn(q, k, v, heads, *args,
                            attn_precision=attn_precision,
                            transformer_options=transformer_options,

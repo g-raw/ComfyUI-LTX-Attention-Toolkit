@@ -20,7 +20,7 @@ class LTXAttentionZoneAnalysis:
     The mask uses pixel coordinates (final image) and is
     automatically resized to latent space (/32 for LTX).
 
-    Requires store_full_maps=True in LTXAttentionCaptureSetup.
+    Requires store_mode=full_fp16 (or hybrid, for that block) in LTXAttentionCaptureSetup.
     """
 
     @classmethod
@@ -168,7 +168,7 @@ class LTXAttentionZoneAnalysis:
         if not has_maps:
             raise ValueError(
                 "[ZoneAnalysis] No complete maps found.\n"
-                "Re-run capture with store_full_maps=True."
+                "Re-run capture with store_mode=full_fp16 (or hybrid)."
             )
 
         P = latent_height * latent_width

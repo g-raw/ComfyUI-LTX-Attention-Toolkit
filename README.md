@@ -43,23 +43,21 @@ nodes_ltx_attention_profiler/
 ├── __init__.py              ← ComfyUI entry point
 │
 ├── core/
-│   ├── stores.py            ← AttentionStore + QKVStore singletons
+│   ├── stores.py            ← StoreRegistry (named, non-singleton) + AttentionStore/QKVStore proxies
 │   ├── hooks.py             ← Universal hook on optimized_attention
 │   └── model_patch.py       ← _forward wrap/unwrap + block hooks
 │
 ├── ops/
 │   ├── freeze.py            ← Head freeze intervention
-│   ├── qkv_transfer.py      ← Q/K/V substitution transfer
-│   └── map_store.py         ← Reduced/full map storage callback
+│   └── qkv_transfer.py      ← Q/K/V substitution transfer
 │
 ├── nodes/
-│   ├── capture.py           ← CaptureSetup, QKVCapture
+│   ├── capture.py           ← CaptureSetup (metrics + key/query/full maps), QKVCapture
 │   ├── transfer.py          ← HeadFreeze, QKVTransfer
 │   ├── visualize.py         ← QueryMap, KeyMap, MetricsViz, GridViz
 │   ├── evolution.py         ← TimestepEvolution
 │   ├── io.py                ← Dump/Load (Attn + QKV)
 │   ├── inspect.py           ← Store inspect nodes
-│   ├── map_store_node.py    ← MapStore node
 │   └── utils.py             ← LatentDims, CompareRuns
 │
 └── utils/
@@ -74,21 +72,42 @@ nodes_ltx_attention_profiler/
 ### Capture
 
 #### `LTX Attn — Setup Capture`
-Patches an LTX-2.3 model to capture attention maps and metrics
-during inference.
+Patches an LTX-2.3 model to capture attention metrics, reduced
+key/query maps, and (optionally) full attention maps during inference.
+Replaces the old separate "Map Store" node — one capture path, one
+`STORE_HANDLE`, real metrics in every mode.
 
 | Input | Type | Description |
 |---|---|---|
 | `model` | MODEL | LTX model to patch |
 | `capture_sa` | BOOL | Capture self-attention |
 | `capture_ca` | BOOL | Capture cross-attention (video→text) |
-| `store_full_maps` | BOOL | Store full [H, Sq, Sk] tensors (heavy) |
-| `map_downsample` | INT | Spatial downsample factor for full maps |
 | `target_blocks` | STRING | `"all"` or `"0,8,16,24,32,40,47"` |
+| `target_heads` | STRING | `"all"` or `"8,12,16"` — RAM filter |
 | `capture_steps` | STRING | `"all"` or `"0,1,2,3"` |
+| `store_mode` | ENUM | `reduced` / `full_fp16` / `hybrid` |
+| `full_blocks` | STRING | Blocks stored at full res when `hybrid` |
+| `map_downsample` | INT | Spatial downsample factor for full maps |
 | `reset_store` | BOOL | Clear previous capture data |
 
-Outputs a **patched MODEL** — plug between loader and KSampler.
+`reduced` always includes the real `entropy`/`temporal`/`spatial`/`sink`
+metrics plus `key_map`/`query_map` (geometry auto-detected from the live
+latent — no manual frame/height/width inputs needed). `full_fp16`/`hybrid`
+additionally store the full `[H, Sq, Sk]` map for the relevant blocks.
+
+**Memory estimates (1280×720, 16 frames, 32 heads, 4 steps) :**
+
+| Mode | RAM |
+|---|---|
+| `reduced` (all 48 blocks) | ~332 MB |
+| `full_fp16` (5 blocks) | ~16 GB |
+| `hybrid` (5 full + 43 reduced) | ~16.3 GB |
+
+Outputs a **patched MODEL** and a **`STORE_HANDLE`** string — plug the
+model between loader and KSampler, and type the handle into any
+visualization/intervention node's `store_handle` widget in a later run
+(see "Hook architecture" below for why this is a separate-run handle
+rather than a wired socket).
 
 ---
 
@@ -102,28 +121,6 @@ Captures raw Q, K, V tensors for use with `LTX QKV — Transfer`.
 | `capture_steps` | STRING | Steps to capture |
 | `capture_sa` | BOOL | Capture self-attention QKV |
 | `capture_ca` | BOOL | Capture cross-attention QKV |
-
----
-
-#### `LTX Attn — Map Store`
-Stores reduced (key_map + query_map per head) or full fp16 maps
-in a dedicated `ATTN_MAP_STORE` object passed to visualization nodes.
-
-| Input | Type | Description |
-|---|---|---|
-| `store_mode` | ENUM | `reduced` / `full_fp16` / `hybrid` |
-| `full_blocks` | STRING | Blocks in full mode when `hybrid` |
-| `latent_frames` | INT | Number of latent frames |
-| `latent_height` | INT | `input_height / 32` |
-| `latent_width` | INT | `input_width / 32` |
-
-**Memory estimates (1280×720, 16 frames, 32 heads, 4 steps) :**
-
-| Mode | RAM |
-|---|---|
-| `reduced` (all 48 blocks) | ~332 MB |
-| `full_fp16` (5 blocks) | ~16 GB |
-| `hybrid` (5 full + 43 reduced) | ~16.3 GB |
 
 ---
 
@@ -172,8 +169,8 @@ Set `key_token_idx` to isolate a specific text token.
 ---
 
 #### `LTX Attn — Grid Viz`
-Full overview grid from a `ATTN_MAP_STORE`.
-X = blocks, Y = heads, each cell = key_map or query_map.
+Full overview grid read from a capture `STORE_HANDLE`.
+X = blocks, Y = heads, each cell = key_map, query_map, or their diff.
 
 `frame_mode` options:
 
@@ -205,7 +202,8 @@ Useful to identify:
 #### `LTX Attn — Head Freeze`
 Locks the attention map of a specific head starting from a pivot step.
 
-Requires a prior capture run with `store_full_maps=True`.
+Requires a prior capture run with `store_mode=full_fp16` (or `hybrid` for
+that block).
 
 | Input | Type | Description |
 |---|---|---|
@@ -257,9 +255,8 @@ Transfer modes (combinable):
 | `LTX QKV — Dump` | Save QKVStore to `.pt` |
 | `LTX QKV — Load` | Load `.pt` into QKVStore |
 | `LTX Attn — Compare Runs` | Diff heatmap between two `.pt` files |
-| `LTX Attn — Store Inspect` | Print AttentionStore contents |
+| `LTX Attn — Store Inspect` | Print AttentionStore contents (incl. key/query map presence) |
 | `LTX QKV — Store Inspect` | Print QKVStore contents |
-| `LTX Map Store — Inspect` | Print ATTN_MAP_STORE contents |
 | `LTX — Latent Dims` | Extract T/H/W from a LATENT |
 
 ---
@@ -273,7 +270,7 @@ Transfer modes (combinable):
       │
 [LTX Attn — Setup Capture]
   capture_sa=True
-  store_full_maps=False
+  store_mode=reduced
   target_blocks="all"
       │
 [KSampler]
@@ -287,7 +284,7 @@ Transfer modes (combinable):
 
 ```
 # Step 1: capture reference maps
-[Load LTX] → [Setup Capture, store_full_maps=True, target_blocks="24"]
+[Load LTX] → [Setup Capture, store_mode=full_fp16, target_blocks="24"]
            → [KSampler] → [Store Dump → "ref.pt"]
 
 # Step 2: apply freeze
@@ -340,12 +337,25 @@ Query map = W.mean(dim=2) → [Sq]  "who is actively looking"
 A single universal hook is installed on both
 `optimized_attention` and `optimized_attention_masked`.
 Priority order per call:
-1. Profiling → AttentionStore
-2. MapStore → ATTN_MAP_STORE callback
-3. QKV Capture → QKVStore
-4. QKV Transfer → Q/K/V substitution
-5. Head Freeze → map injection
-6. Normal pass-through
+1. Profiling → AttentionStore (metrics + key/query/full maps)
+2. QKV Capture → QKVStore
+3. QKV Transfer → Q/K/V substitution
+4. Head Freeze → map injection
+5. Normal pass-through
+
+### Why visualization/intervention nodes use a typed `store_handle` string
+
+Captured data is written into the registry as a side effect of the
+KSampler run, *after* the Setup node itself has already returned. Nodes
+that read it back (`Query Map`, `Key Map`, `Metrics Heatmap`, `Grid Viz`,
+`Head Freeze`, `Compare Runs`-adjacent IO nodes, …) take the handle as a
+plain `STRING` widget rather than a wired socket on purpose: ComfyUI
+schedules nodes by wire dependency, so a typed socket straight off the
+Setup node's output would let these nodes run *before* the KSampler ever
+populates the store, always producing empty results. Typing the handle
+into a `STRING` widget instead means these are a separate, later queue
+run against the already-populated registry instance — leave it blank to
+fall back to whichever store is currently active.
 
 ---
 

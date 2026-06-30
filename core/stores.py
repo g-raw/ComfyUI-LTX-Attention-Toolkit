@@ -10,30 +10,19 @@ import torch.nn.functional as F
 
 class _AttnInst:
     """Data container for one named AttentionStore."""
-    __slots__ = ("name", "sa", "ca", "_step_counter", "_ms_step_counter", "cfg", "_save_callback", "_parsed_heads")
+    __slots__ = ("name", "sa", "ca", "_step_counter", "cfg")
 
     def __init__(self, name: str):
-        self.name             = name
-        self.sa               = {}   # block_idx → step_idx → entry
-        self.ca               = {}
-        self._step_counter    : Dict[str, int] = {}  # key like "sa_N" or "ca_N"
-        self._ms_step_counter : Dict[str, int] = {}  # MapStore-specific counter (key like "mapstore_N")
-        self.cfg              = dict()
-        self._save_callback   = None
-        self._parsed_heads    = None
+        self.name          = name
+        self.sa            = {}   # block_idx → step_idx → entry
+        self.ca            = {}
+        self._step_counter : Dict[str, int] = {}  # key like "sa_N" or "ca_N"
+        self.cfg           = dict()
 
     def reset_data(self):
         self.sa.clear()
         self.ca.clear()
         self._step_counter.clear()
-        self._ms_step_counter.clear()
-
-    def get_ms_step_counter(self, key: str) -> int:
-        """Atomically increment and return the MS step counter for *key*."""
-        n = self._ms_step_counter.get(key, 0)
-        n += 1
-        self._ms_step_counter[key] = n
-        return n
 
 
 class _QKVInst:
@@ -263,29 +252,15 @@ class AttentionStore:
     def name(self):
         return self._inst.name
 
-    @property
-    def _save_callback(self):
-        return self._inst._save_callback
-
-    @_save_callback.setter
-    def _save_callback(self, v):
-        self._inst._save_callback = v
-
-    @property
-    def _parsed_heads(self):
-        return self._inst._parsed_heads
-
-    @_parsed_heads.setter
-    def _parsed_heads(self, v):
-        self._inst._parsed_heads = v
-
     def reset(self):
         self._inst.reset_data()
 
     def record(self, attn_type: str, block_idx: int, timestep: float,
-               attn_weights: torch.Tensor, num_frames: int, patches_per_frame: int):
+               attn_weights: torch.Tensor, num_frames: int, patches_per_frame: int,
+               latent_h: int = 1, latent_w: int = 1):
         """Delegate to _attn_record helper."""
-        _attn_record(self._inst, attn_type, block_idx, timestep, attn_weights, num_frames, patches_per_frame)
+        _attn_record(self._inst, attn_type, block_idx, timestep, attn_weights,
+                     num_frames, patches_per_frame, latent_h, latent_w)
 
 
 class QKVStore:
@@ -343,9 +318,20 @@ class QKVStore:
 
 # ===== Standalone record implementations =====
 
+def _reshape_spatial(vec: torch.Tensor, num_frames: int, latent_h: int, latent_w: int) -> torch.Tensor:
+    """[H, S] -> [H, F, Lh, Lw] when S matches the known geometry, else a safe 1x1 fallback."""
+    H_heads, S = vec.shape
+    expected = num_frames * latent_h * latent_w
+    if expected > 0 and S == expected:
+        return vec.view(H_heads, num_frames, latent_h, latent_w)
+    return vec.view(H_heads, 1, 1, S)
+
+
 def _attn_record(inst: _AttnInst, attn_type: str, block_idx: int, timestep: float,
-                 attn_weights: torch.Tensor, num_frames: int, patches_per_frame: int):
-    """Record one attention step into an _AttnInst. Identical logic to the old AttentionStore.record()."""
+                 attn_weights: torch.Tensor, num_frames: int, patches_per_frame: int,
+                 latent_h: int = 1, latent_w: int = 1):
+    """Record one attention step into an _AttnInst — metrics, reduced key/query maps,
+    and (depending on store_mode) the full map."""
     cfg = inst.cfg
     if not cfg:
         return
@@ -369,6 +355,12 @@ def _attn_record(inst: _AttnInst, attn_type: str, block_idx: int, timestep: floa
 
     store_dict = inst.sa if attn_type == "sa" else inst.ca
     W = attn_weights.detach()
+
+    target_heads = cfg.get("target_heads")
+    if target_heads is not None:
+        head_idx = sorted(h for h in target_heads if h < W.shape[0])
+        W = W[head_idx]
+
     H_heads, Sq, Sk = W.shape
     CHUNK = 4
 
@@ -405,9 +397,18 @@ def _attn_record(inst: _AttnInst, attn_type: str, block_idx: int, timestep: floa
     # ── Sink mass ───────────────────────────────────────────────────────
     sink_mass = (W[:, :, 0].mean(dim=-1) + W[:, :, -1].mean(dim=-1)).cpu()
 
+    # ── Reduced key/query maps (cheap, always computed) ───────────────────
+    key_map   = _reshape_spatial(W.mean(dim=1).float().cpu(), num_frames, latent_h, latent_w)
+    query_map = _reshape_spatial(W.mean(dim=2).float().cpu(), num_frames, latent_h, latent_w)
+
     # ── Full map ────────────────────────────────────────────────────────
+    store_mode  = cfg.get("store_mode", "reduced")
+    full_blocks = cfg.get("full_blocks", set())
+    want_full   = (store_mode == "full_fp16" or
+                  (store_mode == "hybrid" and block_idx in full_blocks))
+
     full_map = None
-    if cfg.get("store_full_maps", False):
+    if want_full:
         ds = cfg.get("map_downsample", 1)
         if ds > 1 and Sq > ds and Sk > ds:
             full_map = F.avg_pool2d(
@@ -420,13 +421,15 @@ def _attn_record(inst: _AttnInst, attn_type: str, block_idx: int, timestep: floa
     torch.cuda.empty_cache()
 
     entry = {
-        "map":      full_map,
-        "entropy":  entropy,
-        "temporal": temporal_scores,
-        "spatial":  spatial_scores,
-        "sink":     sink_mass,
-        "timestep": timestep,
-        "step_idx": step_idx,
+        "map":       full_map,
+        "key_map":   key_map,
+        "query_map": query_map,
+        "entropy":   entropy,
+        "temporal":  temporal_scores,
+        "spatial":   spatial_scores,
+        "sink":      sink_mass,
+        "timestep":  timestep,
+        "step_idx":  step_idx,
     }
 
     if block_idx not in store_dict:

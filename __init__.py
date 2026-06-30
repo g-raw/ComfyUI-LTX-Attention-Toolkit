@@ -5,9 +5,7 @@ from .nodes.visualize       import (LTXAttentionQueryMap, LTXAttentionKeyMap,
 from .nodes.evolution       import LTXAttentionTimestepEvolution
 from .nodes.io              import (LTXAttentionStoreDump, LTXAttentionStoreLoad,
                                    LTXQKVDump, LTXQKVLoad)
-from .nodes.inspect         import (LTXAttentionStoreInspect, LTXQKVStoreInspect,
-                                   LTXMapStoreInspect)
-from .nodes.map_store_node  import LTXAttentionMapStore
+from .nodes.inspect         import LTXAttentionStoreInspect, LTXQKVStoreInspect
 from .nodes.utils           import LTXLatentDims, LTXAttentionCompareRuns
 from .nodes.zone_analysis   import LTXAttentionZoneAnalysis
 from .nodes.rf_inversion    import LTXRFForwardSampler, LTXRFReverseSampler
@@ -26,8 +24,6 @@ NODE_CLASS_MAPPINGS = {
     "LTXAttentionGridViz":           LTXAttentionGridViz,
     "LTXAttentionTimestepEvolution": LTXAttentionTimestepEvolution,
     "LTXAttentionZoneAnalysis":      LTXAttentionZoneAnalysis,
-    # Map Store
-    "LTXAttentionMapStore":          LTXAttentionMapStore,
     # IO
     "LTXAttentionStoreDump":         LTXAttentionStoreDump,
     "LTXAttentionStoreLoad":         LTXAttentionStoreLoad,
@@ -36,7 +32,6 @@ NODE_CLASS_MAPPINGS = {
     # Inspect / Debug
     "LTXAttentionStoreInspect":      LTXAttentionStoreInspect,
     "LTXQKVStoreInspect":            LTXQKVStoreInspect,
-    "LTXMapStoreInspect":            LTXMapStoreInspect,
     # Utils
     "LTXLatentDims":                 LTXLatentDims,
     "LTXAttentionCompareRuns":       LTXAttentionCompareRuns,
@@ -56,14 +51,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXAttentionGridViz":           "LTX Attn — Grid Viz",
     "LTXAttentionTimestepEvolution": "LTX Attn — Timestep Evolution",
     "LTXAttentionZoneAnalysis":      "LTX Attn — Zone Analysis",
-    "LTXAttentionMapStore":          "LTX Attn — Map Store",
     "LTXAttentionStoreDump":         "LTX Attn — Store Dump",
     "LTXAttentionStoreLoad":         "LTX Attn — Store Load",
     "LTXQKVDump":                    "LTX QKV — Dump",
     "LTXQKVLoad":                    "LTX QKV — Load",
     "LTXAttentionStoreInspect":      "LTX Attn — Store Inspect",
     "LTXQKVStoreInspect":            "LTX QKV — Store Inspect",
-    "LTXMapStoreInspect":            "LTX Map Store — Inspect",
     "LTXLatentDims":                 "LTX — Latent Dims",
     "LTXAttentionCompareRuns":       "LTX Attn — Compare Runs",
     "LTXRFForwardSampler":           "LTX RF-Inv Forward (x0→xT)",
