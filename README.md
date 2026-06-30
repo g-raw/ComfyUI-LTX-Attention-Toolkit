@@ -73,9 +73,8 @@ nodes_ltx_attention_profiler/
 
 #### `LTX Attn — Setup Capture`
 Patches an LTX-2.3 model to capture attention metrics, reduced
-key/query maps, and (optionally) full attention maps during inference.
-Replaces the old separate "Map Store" node — one capture path, one
-`STORE_HANDLE`, real metrics in every mode.
+key/query maps, and (optionally) full attention maps during inference —
+one capture path, one `STORE_HANDLE`, real metrics in every mode.
 
 | Input | Type | Description |
 |---|---|---|
@@ -212,6 +211,7 @@ that block).
 | `freeze_from_step` | INT | Step at which freeze activates |
 | `freeze_step_source` | INT | Which captured step's map to use |
 | `blend_weight` | FLOAT | 1.0 = pure frozen, 0.5 = 50/50 blend |
+| `store_handle` | STRING | Optional — target a specific named store. Blank = whichever store is currently active |
 
 **Effect on head 8, block 24:**
 Prevents the temporal window from shrinking during denoising →
@@ -244,6 +244,9 @@ Transfer modes (combinable):
 `sim_filter`: only transfer tokens where Q_target ≈ Q_source
 (cosine similarity threshold) — useful for content-preserving transfer.
 
+`qkv_handle` (STRING, optional): target a specific named QKV store.
+Blank = whichever QKV store is currently active.
+
 ---
 
 ### IO & Debug
@@ -258,6 +261,12 @@ Transfer modes (combinable):
 | `LTX Attn — Store Inspect` | Print AttentionStore contents (incl. key/query map presence) |
 | `LTX QKV — Store Inspect` | Print QKVStore contents |
 | `LTX — Latent Dims` | Extract T/H/W from a LATENT |
+
+All Dump/Load nodes take an optional `store_handle`/`qkv_handle` STRING
+input to target a specific named store instead of implicitly acting on
+whichever store is currently active in the registry — important once
+multiple stores coexist (parallel branches, multiple captures in one
+session).
 
 ---
 
