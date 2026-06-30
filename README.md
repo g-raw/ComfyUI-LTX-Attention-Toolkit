@@ -257,7 +257,7 @@ Blank = whichever QKV store is currently active.
 | `LTX Attn — Store Load` | Load `.pt` into AttentionStore |
 | `LTX QKV — Dump` | Save QKVStore to `.pt` |
 | `LTX QKV — Load` | Load `.pt` into QKVStore |
-| `LTX Attn — Compare Runs` | Diff heatmap between two `.pt` files |
+| `LTX Attn — Compare Runs` | Diff heatmap + ranked (block, head) table for one metric between two runs |
 | `LTX Attn — Store Inspect` | Print AttentionStore contents (incl. key/query map presence) |
 | `LTX QKV — Store Inspect` | Print QKVStore contents |
 | `LTX — Latent Dims` | Extract T/H/W from a LATENT |
@@ -267,6 +267,27 @@ input to target a specific named store instead of implicitly acting on
 whichever store is currently active in the registry — important once
 multiple stores coexist (parallel branches, multiple captures in one
 session).
+
+#### `LTX Attn — Compare Runs` details
+
+Compares one metric (`entropy`/`temporal`/`spatial`/`sink`) between two
+captures, block-by-block and head-by-head, for self- or cross-attention.
+
+| Input | Type | Description |
+|---|---|---|
+| `store_handle_a` / `store_handle_b` | STRING | In-memory store to read directly (skips the file load when set) |
+| `path_run_a` / `path_run_b` | STRING | `.pt` dump path — used only if the matching `store_handle_*` is blank |
+| `attn_type` | ENUM | `sa` / `ca` |
+| `metric` | ENUM | `entropy` / `temporal` / `spatial` / `sink` |
+| `step_idx` | INT | `-1` averages across all captured steps |
+| `top_k` | INT | How many `(block, head)` pairs to list, ranked by `|A - B|` |
+
+Blocks are aligned by their actual index (not column position), so the
+two runs don't need identical `target_blocks`. Outputs a diff heatmap
+IMAGE plus a `stats_text` STRING with summary stats and the full
+top-`top_k` ranked table — run it once per metric, then compare which
+`(block, head)` pairs recur across metrics to spot structurally divergent
+heads vs. metric-specific noise.
 
 ---
 
