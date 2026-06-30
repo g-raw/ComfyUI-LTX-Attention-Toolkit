@@ -53,90 +53,57 @@ class StoreRegistry:
         self._cur_attn: Optional[str] = None  # handle (name) of current AttentionStore
         self._cur_qkv:  Optional[str] = None  # handle (name) of current QKVStore
 
-    def create(self, name: Optional[str] = None) -> str:
-        """Create a new named AttentionStore. Returns the handle (unique name). Auto-selects as current."""
-        with self._lock:
-            if not name:
-                h = f"store_{id(self._attn)}"
-                i = 2
-                while h in self._attn:
-                    h = f"store_{id(self._attn)}_{i}"
-                    i += 1
-                name = h
-            else:
-                base = name
-                i = 2
-                while name in self._attn:
-                    name = f"{base}_{i}"
-                    i += 1
-            inst = _AttnInst(name)
-            self._attn[name] = inst
-            self._cur_attn = name
-        return name
-
     def create_and_get_attn(self, name: Optional[str] = None) -> _AttnInst:
-        """Atomic create + return instance — no race condition between create and retrieval."""
+        """Get-or-create the named instance and make it current (atomic).
+
+        A blank name always allocates a brand-new, uniquely-named instance
+        (anonymous handles never collide). An explicit name is reused if it
+        already exists rather than silently suffixed — callers rely on the
+        name staying stable across repeated runs (e.g. Setup Capture's
+        reset_store clears *this* instance, it doesn't create a new one).
+        """
         with self._lock:
             if not name:
-                # Each auto-name is unique (uses id-based counter) so no collision between setups
                 h = f"store_{id(self._attn)}"
                 i = 2
                 while h in self._attn:
                     h = f"store_{id(self._attn)}_{i}"
                     i += 1
                 name = h
+            if name in self._attn:
+                inst = self._attn[name]
             else:
-                base = name
-                i = 2
-                while name in self._attn:
-                    name = f"{base}_{i}"
-                    i += 1
-            inst = _AttnInst(name)
-            self._attn[name] = inst
+                inst = _AttnInst(name)
+                self._attn[name] = inst
             self._cur_attn = name
+        return inst
+
+    def create(self, name: Optional[str] = None) -> str:
+        """Get-or-create the named AttentionStore. Returns the handle. Auto-selects as current."""
+        return self.create_and_get_attn(name).name
+
+    def create_and_get_qkv(self, name: Optional[str] = None) -> _QKVInst:
+        """Get-or-create the named instance and make it current (atomic).
+        See create_and_get_attn for the get-or-create rationale."""
+        with self._lock:
+            if not name:
+                h = f"qkv_{id(self._qkv)}"
+                i = 2
+                while h in self._qkv:
+                    h = f"qkv_{id(self._qkv)}_{i}"
+                    i += 1
+                name = h
+            if name in self._qkv:
+                inst = self._qkv[name]
+            else:
+                inst = _QKVInst(name)
+                self._qkv[name] = inst
+            self._cur_qkv = name
         return inst
 
     def create_qkv(self, name: Optional[str] = None) -> str:
-        """Create a new named QKVStore. Returns the handle."""
-        with self._lock:
-            if not name:
-                h = f"qkv_{id(self._qkv)}"
-                i = 2
-                while h in self._qkv:
-                    h = f"qkv_{id(self._qkv)}_{i}"
-                    i += 1
-                name = h
-            else:
-                base = name
-                i = 2
-                while name in self._qkv:
-                    name = f"{base}_{i}"
-                    i += 1
-            inst = _QKVInst(name)
-            self._qkv[name] = inst
-            self._cur_qkv = name
-        return name
-
-    def create_and_get_qkv(self, name: Optional[str] = None) -> _QKVInst:
-        """Atomic create + return instance — no race condition between create and retrieval."""
-        with self._lock:
-            if not name:
-                h = f"qkv_{id(self._qkv)}"
-                i = 2
-                while h in self._qkv:
-                    h = f"qkv_{id(self._qkv)}_{i}"
-                    i += 1
-                name = h
-            else:
-                base = name
-                i = 2
-                while name in self._qkv:
-                    name = f"{base}_{i}"
-                    i += 1
-            inst = _QKVInst(name)
-            self._qkv[name] = inst
-            self._cur_qkv = name
-        return inst
+        """Get-or-create the named QKVStore. Returns the handle."""
+        return self.create_and_get_qkv(name).name
 
     def switch_attn(self, handle: str):
         """Set current AttentionStore by handle. Raises KeyError if not found."""

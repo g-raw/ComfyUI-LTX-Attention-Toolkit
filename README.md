@@ -87,7 +87,8 @@ one capture path, one `STORE_HANDLE`, real metrics in every mode.
 | `store_mode` | ENUM | `reduced` / `full_fp16` / `hybrid` |
 | `full_blocks` | STRING | Blocks stored at full res when `hybrid` |
 | `map_downsample` | INT | Spatial downsample factor for full maps |
-| `reset_store` | BOOL | Clear previous capture data |
+| `store_name` | STRING | Empty = new auto-named handle every run. Given a name, re-running reuses that same handle (get-or-create) instead of spawning `name_2`, `name_3`, … |
+| `reset_store` | BOOL | With a named `store_name`: clear that handle before capturing. With it blank, the handle is always fresh already, so this has no effect |
 
 `reduced` always includes the real `entropy`/`temporal`/`spatial`/`sink`
 metrics plus `key_map`/`query_map` (geometry auto-detected from the live
@@ -120,6 +121,8 @@ Captures raw Q, K, V tensors for use with `LTX QKV — Transfer`.
 | `capture_steps` | STRING | Steps to capture |
 | `capture_sa` | BOOL | Capture self-attention QKV |
 | `capture_ca` | BOOL | Capture cross-attention QKV |
+| `store_name` | STRING | Empty = new auto-named handle every run; given a name, re-running reuses that same handle |
+| `reset_store` | BOOL | With a named `store_name`, clear that handle before capturing |
 
 ---
 

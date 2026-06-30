@@ -70,12 +70,9 @@ class LTXAttentionStoreLoad:
         payload = torch.load(input_path, map_location="cpu", weights_only=False)
         reg = get_registry()
         if store_handle and store_handle.strip():
-            if store_handle not in reg.list_names():
-                reg.switch_attn(reg.create(store_handle))
-            else:
-                reg.switch_attn(store_handle)
+            reg.create(store_handle)
         elif not reg._cur_attn:
-            reg.switch_attn(reg.create('default'))
+            reg.create('default')
         store = AttentionStore()
         if not merge:
             store.sa  = payload.get("sa",  {})
@@ -145,12 +142,9 @@ class LTXQKVLoad:
         payload = torch.load(input_path, map_location="cpu", weights_only=False)
         reg = get_registry()
         if qkv_handle and qkv_handle.strip():
-            if qkv_handle not in reg.list_qkv_names():
-                reg.switch_qkv(reg.create_qkv(qkv_handle))
-            else:
-                reg.switch_qkv(qkv_handle)
+            reg.create_qkv(qkv_handle)
         elif not reg._cur_qkv:
-            reg.switch_qkv(reg.create_qkv('default'))
+            reg.create_qkv('default')
         store = QKVStore()
         if not merge:
             store.reset()
