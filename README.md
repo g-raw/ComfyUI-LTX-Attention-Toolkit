@@ -272,15 +272,17 @@ session).
 
 Compares one metric (`entropy`/`temporal`/`spatial`/`sink`) between two
 captures, block-by-block and head-by-head, for self- or cross-attention.
+Reads both stores live from the registry by handle — to compare a dumped
+`.pt`, load it into a handle first with `Store Load`.
 
 | Input | Type | Description |
 |---|---|---|
-| `store_handle_a` / `store_handle_b` | STRING | In-memory store to read directly (skips the file load when set) |
-| `path_run_a` / `path_run_b` | STRING | `.pt` dump path — used only if the matching `store_handle_*` is blank |
+| `store_handle_a` / `store_handle_b` | STRING | The two stores to compare |
 | `attn_type` | ENUM | `sa` / `ca` |
 | `metric` | ENUM | `entropy` / `temporal` / `spatial` / `sink` |
 | `step_idx` | INT | `-1` averages across all captured steps |
 | `top_k` | INT | How many `(block, head)` pairs to list, ranked by `|A - B|` |
+| `norm_percentile` | FLOAT | Clip the heatmap color scale at this percentile of `\|diff\|` (default 0.98) so a few outlier cells don't wash the rest out to white — `1.0` uses the true max |
 
 Blocks are aligned by their actual index (not column position), so the
 two runs don't need identical `target_blocks`. Outputs a diff heatmap

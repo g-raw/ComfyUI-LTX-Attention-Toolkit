@@ -32,18 +32,17 @@ class LTXLatentDims:
 
 
 class LTXAttentionCompareRuns:
-    """Diff two captures (live store_handle, or a dumped .pt as fallback)
-    for one metric, ranked by |A - B| per (block, head)."""
+    """Diff two captures (read live from the registry by store_handle)
+    for one metric, ranked by |A - B| per (block, head). To compare a
+    dumped .pt, load it into a handle first with Store Load."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
             "store_handle_a": ("STRING", {"default": "",
-                               "placeholder": "in-memory store A (overrides path_run_a)"}),
+                               "placeholder": "store A handle"}),
             "store_handle_b": ("STRING", {"default": "",
-                               "placeholder": "in-memory store B (overrides path_run_b)"}),
-            "path_run_a": ("STRING", {"default": "run_a.pt"}),
-            "path_run_b": ("STRING", {"default": "run_b.pt"}),
+                               "placeholder": "store B handle"}),
             "attn_type":  (["sa", "ca"], {"default": "sa"}),
             "metric":     (["entropy","temporal","spatial","sink"],
                           {"default": "entropy"}),
@@ -52,6 +51,10 @@ class LTXAttentionCompareRuns:
             "cell_size":  ("INT",    {"default": 16, "min": 4, "max": 64}),
             "top_k":      ("INT",    {"default": 15, "min": 1, "max": 1536,
                            "tooltip": "How many (block, head) pairs to list, ranked by |A - B|."}),
+            "norm_percentile": ("FLOAT", {"default": 0.98, "min": 0.5, "max": 1.0, "step": 0.01,
+                           "tooltip": "Clip |diff| beyond this percentile before mapping to color, "
+                                      "so a few outlier cells don't wash out the rest of the heatmap "
+                                      "to white. 1.0 = no clipping (use the true max)."}),
         }}
 
     RETURN_TYPES = ("IMAGE", "STRING")
@@ -60,12 +63,11 @@ class LTXAttentionCompareRuns:
     CATEGORY     = "g_raw/LTX/Profiler"
 
     @staticmethod
-    def _load_run(path: str, store_handle: str, reg):
-        """Read from a live store_handle if given, else fall back to a dumped .pt."""
-        if store_handle and store_handle.strip():
-            inst = reg._get_attn(store_handle.strip())
-            return {"sa": inst.sa, "ca": inst.ca, "cfg": inst.cfg}
-        return torch.load(path, map_location="cpu", weights_only=False)
+    def _load_run(store_handle: str, reg):
+        if not store_handle or not store_handle.strip():
+            raise ValueError("[CompareRuns] store_handle is required.")
+        inst = reg._get_attn(store_handle.strip())
+        return {"sa": inst.sa, "ca": inst.ca, "cfg": inst.cfg}
 
     @staticmethod
     def _extract(run, attn_type, metric, step_idx):
@@ -94,11 +96,12 @@ class LTXAttentionCompareRuns:
             mat[:, col] = vals
         return mat, block_indices
 
-    def compare(self, store_handle_a, store_handle_b, path_run_a, path_run_b,
-                attn_type, metric, step_idx, colormap, cell_size, top_k):
+    def compare(self, store_handle_a, store_handle_b,
+                attn_type, metric, step_idx, colormap, cell_size, top_k,
+                norm_percentile):
         reg   = get_registry()
-        run_a = self._load_run(path_run_a, store_handle_a, reg)
-        run_b = self._load_run(path_run_b, store_handle_b, reg)
+        run_a = self._load_run(store_handle_a, reg)
+        run_b = self._load_run(store_handle_b, reg)
 
         mat_a, blocks_a = self._extract(run_a, attn_type, metric, step_idx)
         mat_b, blocks_b = self._extract(run_b, attn_type, metric, step_idx)
@@ -118,8 +121,9 @@ class LTXAttentionCompareRuns:
         mat_a, mat_b = mat_a[:mh], mat_b[:mh]
 
         diff      = mat_a - mat_b
-        abs_max   = max(abs(float(diff.min())), abs(float(diff.max())), 1e-8)
-        diff_norm = (diff / abs_max) * 0.5 + 0.5
+        clip_val  = max(float(np.percentile(np.abs(diff), norm_percentile * 100)), 1e-8)
+        diff_clip = np.clip(diff, -clip_val, clip_val)
+        diff_norm = (diff_clip / clip_val) * 0.5 + 0.5
         colored   = apply_colormap_batch(diff_norm[np.newaxis], colormap)[0]
         out_h, out_w = mh * cell_size, len(common_blocks) * cell_size
         ct = (torch.from_numpy(colored).permute(2,0,1).unsqueeze(0).float())
@@ -145,7 +149,9 @@ class LTXAttentionCompareRuns:
             f"A: mean={mat_a.mean():.4f} std={mat_a.std():.4f}\n"
             f"B: mean={mat_b.mean():.4f} std={mat_b.std():.4f}\n"
             f"Diff: mean={diff.mean():.4f} std={diff.std():.4f}\n"
-            f"Max A>B: {diff.max():.4f} | Max B>A: {(-diff).max():.4f}\n\n"
+            f"Max A>B: {diff.max():.4f} | Max B>A: {(-diff).max():.4f}\n"
+            f"Heatmap color scale clipped at ±{clip_val:.4f} "
+            f"({norm_percentile*100:.0f}th percentile of |diff|)\n\n"
             f"Top {min(top_k, diff.size)} by |A-B|:\n" + "\n".join(rank_lines)
         )
         return (out, stats)
