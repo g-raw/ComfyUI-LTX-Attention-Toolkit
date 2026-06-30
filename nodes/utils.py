@@ -4,7 +4,8 @@ import torch
 import torch.nn.functional as F
 
 from ..core.stores     import get_registry
-from ..utils.graphics  import apply_colormap_batch, add_grid_lines
+from ..utils.graphics  import (apply_colormap_batch, add_grid_lines,
+                               make_colorbar, vstack_padded)
 
 
 class LTXLatentDims:
@@ -47,7 +48,10 @@ class LTXAttentionCompareRuns:
             "metric":     (["entropy","temporal","spatial","sink"],
                           {"default": "entropy"}),
             "step_idx":   ("INT",    {"default": -1, "min": -1, "max": 255}),
-            "colormap":   (["coolwarm","viridis","inferno"], {"default": "coolwarm"}),
+            "colormap":   (["diverging","coolwarm","viridis","inferno"],
+                          {"default": "diverging",
+                           "tooltip": "diverging: 0 = black, so identical cells read as neutral "
+                                      "instead of coolwarm's near-white midpoint."}),
             "cell_size":  ("INT",    {"default": 16, "min": 4, "max": 64}),
             "top_k":      ("INT",    {"default": 15, "min": 1, "max": 1536,
                            "tooltip": "How many (block, head) pairs to list, ranked by |A - B|."}),
@@ -130,7 +134,9 @@ class LTXAttentionCompareRuns:
         ct = F.interpolate(ct, size=(out_h, out_w), mode="nearest")
         img_np = ct.squeeze(0).permute(1,2,0).numpy()
         img_np = add_grid_lines(img_np, cell_size, mh, len(common_blocks))
-        out    = torch.from_numpy(img_np).unsqueeze(0).clamp(0.0, 1.0)
+        colorbar = make_colorbar(clip_val, colormap, width=out_w)
+        img_np   = vstack_padded([img_np, colorbar])
+        out      = torch.from_numpy(img_np).unsqueeze(0).clamp(0.0, 1.0)
 
         # ── Ranked (block, head) table by |A - B| ─────────────────────────
         flat_idx = np.argsort(np.abs(diff).ravel())[::-1][:top_k]
@@ -144,6 +150,8 @@ class LTXAttentionCompareRuns:
             )
 
         stats  = (
+            f"A = '{store_handle_a}'  |  B = '{store_handle_b}'\n"
+            f"diff = A - B  →  positive (red) = A > B, negative (blue) = B > A\n"
             f"Metric: {metric} ({attn_type}) | Step: {step_idx} | "
             f"Blocks compared: {common_blocks}\n"
             f"A: mean={mat_a.mean():.4f} std={mat_a.std():.4f}\n"
@@ -151,7 +159,8 @@ class LTXAttentionCompareRuns:
             f"Diff: mean={diff.mean():.4f} std={diff.std():.4f}\n"
             f"Max A>B: {diff.max():.4f} | Max B>A: {(-diff).max():.4f}\n"
             f"Heatmap color scale clipped at ±{clip_val:.4f} "
-            f"({norm_percentile*100:.0f}th percentile of |diff|)\n\n"
+            f"({norm_percentile*100:.0f}th percentile of |diff|), "
+            f"see colorbar at the bottom of the image\n\n"
             f"Top {min(top_k, diff.size)} by |A-B|:\n" + "\n".join(rank_lines)
         )
         return (out, stats)

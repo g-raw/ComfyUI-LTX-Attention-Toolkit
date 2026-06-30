@@ -38,6 +38,12 @@ def _build_colormap(name: str) -> np.ndarray:
         r = np.interp(t, [0,.5,1], [0.230,0.865,0.706])
         g = np.interp(t, [0,.5,1], [0.299,0.865,0.016])
         b = np.interp(t, [0,.5,1], [0.754,0.865,0.150])
+    elif name == "diverging":
+        # Blue -> black -> red, for signed diffs: 0 reads as "no change"
+        # instead of coolwarm's near-white midpoint.
+        r = np.interp(t, [0,.5,1], [0.100,0.000,0.950])
+        g = np.interp(t, [0,.5,1], [0.350,0.000,0.080])
+        b = np.interp(t, [0,.5,1], [0.950,0.000,0.080])
     else:  # gray
         r = g = b = t
     return np.stack([r, g, b], axis=-1).astype(np.float32)
@@ -54,6 +60,85 @@ def apply_colormap_batch(maps: np.ndarray, name: str) -> np.ndarray:
     lut = get_colormap(name)
     idx = (np.clip(maps, 0.0, 1.0) * 255).astype(np.uint8)
     return lut[idx].astype(np.float32)
+
+
+# ── Minimal 3x5 bitmap font (digits + sign/punctuation) ─────────────────────
+# No PIL dependency in this toolkit — just enough glyphs to label a colorbar.
+
+_FONT_3x5 = {
+    "0": ("###", "#.#", "#.#", "#.#", "###"),
+    "1": (".#.", "##.", ".#.", ".#.", "###"),
+    "2": ("###", "..#", "###", "#..", "###"),
+    "3": ("###", "..#", "###", "..#", "###"),
+    "4": ("#.#", "#.#", "###", "..#", "..#"),
+    "5": ("###", "#..", "###", "..#", "###"),
+    "6": ("###", "#..", "###", "#.#", "###"),
+    "7": ("###", "..#", "..#", "..#", "..#"),
+    "8": ("###", "#.#", "###", "#.#", "###"),
+    "9": ("###", "#.#", "###", "..#", "###"),
+    "-": ("...", "...", "###", "...", "..."),
+    "+": ("...", ".#.", "###", ".#.", "..."),
+    ".": ("...", "...", "...", "...", ".#."),
+    " ": ("...", "...", "...", "...", "..."),
+}
+
+
+def draw_text(canvas: np.ndarray, text: str, x: int, y: int,
+              color=(1.0, 1.0, 1.0), scale: int = 2) -> None:
+    """Stamp a string onto an RGB float32 canvas using the bitmap font above.
+    (x, y) is the top-left corner. Unsupported characters render as blank."""
+    color = np.asarray(color, dtype=np.float32)
+    H, W = canvas.shape[:2]
+    cx = x
+    for ch in text:
+        glyph = _FONT_3x5.get(ch, _FONT_3x5[" "])
+        for row, bits in enumerate(glyph):
+            for col, bit in enumerate(bits):
+                if bit != "#":
+                    continue
+                py0, py1 = y + row * scale, y + (row + 1) * scale
+                px0, px1 = cx + col * scale, cx + (col + 1) * scale
+                py0, py1 = max(py0, 0), min(py1, H)
+                px0, px1 = max(px0, 0), min(px1, W)
+                if py1 > py0 and px1 > px0:
+                    canvas[py0:py1, px0:px1] = color
+        cx += (3 + 1) * scale
+
+
+def make_colorbar(clip_val: float, colormap: str, width: int = 240,
+                  height: int = 34, scale: int = 2) -> np.ndarray:
+    """Horizontal gradient strip from -clip_val (left) to +clip_val (right),
+    with numeric end labels and a center tick at zero."""
+    lut    = get_colormap(colormap)
+    bar_h  = height - 10
+    t      = np.linspace(0.0, 1.0, width, dtype=np.float32)
+    idx    = (t * 255).astype(np.uint8)
+    strip  = lut[idx].astype(np.float32)
+    canvas = np.full((height, width, 3), 0.08, dtype=np.float32)
+    canvas[0:bar_h] = np.broadcast_to(strip, (bar_h, width, 3))
+    canvas[bar_h:bar_h + 2, width // 2 - 1:width // 2 + 1] = 1.0  # zero tick
+
+    lo_label = f"-{clip_val:.3g}"
+    hi_label = f"+{clip_val:.3g}"
+    draw_text(canvas, lo_label, 2, bar_h + 2, color=(1, 1, 1), scale=1)
+    hi_x = max(width - (len(hi_label) * 4 * 1) - 2, width // 2 + 4)
+    draw_text(canvas, hi_label, hi_x, bar_h + 2, color=(1, 1, 1), scale=1)
+    return canvas
+
+
+def vstack_padded(images: list, pad_color: float = 0.08) -> np.ndarray:
+    """Stack [H, W, 3] float32 images vertically, padding narrower ones to
+    the widest, instead of requiring identical widths."""
+    max_w = max(img.shape[1] for img in images)
+    padded = []
+    for img in images:
+        if img.shape[1] < max_w:
+            canvas = np.full((img.shape[0], max_w, 3), pad_color, dtype=np.float32)
+            canvas[:, :img.shape[1]] = img
+            padded.append(canvas)
+        else:
+            padded.append(img)
+    return np.concatenate(padded, axis=0)
 
 
 def add_grid_lines(img: np.ndarray, cell_size: int,

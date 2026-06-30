@@ -286,6 +286,14 @@ Reads both stores live from the registry by handle — to compare a dumped
 | `step_idx` | INT | `-1` averages across all captured steps |
 | `top_k` | INT | How many `(block, head)` pairs to list, ranked by `|A - B|` |
 | `norm_percentile` | FLOAT | Clip the heatmap color scale at this percentile of `\|diff\|` (default 0.98) so a few outlier cells don't wash the rest out to white — `1.0` uses the true max |
+| `colormap` | ENUM | `diverging` (default, 0 = black) / `coolwarm` (0 = near-white) / `viridis` / `inferno` |
+
+**Sign convention:** `diff = A - B` — positive (red) means A's value is
+higher, negative (blue) means B's is higher. `stats_text` prints which
+handle is A and which is B so this is never ambiguous from the image
+alone. The output IMAGE has a numeric colorbar stamped along the bottom
+(`-clip_val` / `0` / `+clip_val`) so the actual magnitude is readable,
+not just the direction.
 
 Blocks are aligned by their actual index (not column position), so the
 two runs don't need identical `target_blocks`. Outputs a diff heatmap
