@@ -92,11 +92,22 @@ def make_map_store_callback(
                 store_dict = target_inst.sa     # MapStore uses sa for both types
                 if block_idx not in store_dict:
                     store_dict[block_idx] = {}
+
+                # Ensure all tensors are on CPU for dump/load compatibility
+                # (SetupCapture entries always go through .cpu(), registry
+                # consumers may torch.save() the store regardless of source)
+                map_cpu    = W.half().cpu()
+                key_map_cp = key_map.cpu()
+                query_map_cp = query_map.cpu()
+
                 entry_reg = {
-                    "map":       W.half(),       # full attention map (same as SetupCapture)
-                    "key_map":   key_map,
-                    "query_map": query_map,
-                    "entropy":   torch.zeros(H_heads),  # dummy — entropy not computed by MapStore
+                    "map":       map_cpu,            # full attention map (same as SetupCapture)
+                    "key_map":   key_map_cp,
+                    "query_map": query_map_cp,
+                    "entropy":   torch.zeros(H_heads),           # dummy — entropy not computed by MapStore
+                    "temporal":  torch.zeros(H_heads),           # compat: MetricsViz checks for this key
+                    "spatial":   torch.zeros(H_heads),           # compat: MetricsViz checks for this key
+                    "sink":      torch.zeros(H_heads),           # compat: MetricsViz checks for this key
                     "timestep":  float(timestep),
                     "step_idx":  ms_step,
                 }
