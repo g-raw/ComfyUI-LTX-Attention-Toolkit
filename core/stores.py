@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 import threading
 from typing import Dict, Optional, Any
 
@@ -294,6 +295,41 @@ def _reshape_spatial(vec: torch.Tensor, num_frames: int, latent_h: int, latent_w
     return vec.view(H_heads, 1, 1, S)
 
 
+_FRAME_DIST_CACHE: Dict[int, torch.Tensor] = {}
+
+
+def _get_frame_dist_matrix(num_frames: int) -> torch.Tensor:
+    """[F, F] = |fk - fq|, content-independent (depends only on num_frames) —
+    memoized since target_blocks="all" calls _attn_record many times per run
+    with the same geometry."""
+    cached = _FRAME_DIST_CACHE.get(num_frames)
+    if cached is None:
+        idx = torch.arange(num_frames, dtype=torch.float32)
+        cached = (idx.view(-1, 1) - idx.view(1, -1)).abs()
+        _FRAME_DIST_CACHE[num_frames] = cached
+    return cached
+
+
+_SPATIAL_DIST_CACHE: Dict[tuple, torch.Tensor] = {}
+
+
+def _get_spatial_dist_matrix(latent_h: int, latent_w: int) -> torch.Tensor:
+    """[P, P] = Euclidean distance between patch-grid positions, in patch
+    units (not pixels — the latent is already patch_size-downsampled).
+    Content-independent, memoized per (latent_h, latent_w) like the frame
+    version above."""
+    key = (latent_h, latent_w)
+    cached = _SPATIAL_DIST_CACHE.get(key)
+    if cached is None:
+        rows = torch.arange(latent_h, dtype=torch.float32).view(-1, 1).expand(latent_h, latent_w).reshape(-1)
+        cols = torch.arange(latent_w, dtype=torch.float32).view(1, -1).expand(latent_h, latent_w).reshape(-1)
+        dr = rows.view(-1, 1) - rows.view(1, -1)
+        dc = cols.view(-1, 1) - cols.view(1, -1)
+        cached = (dr.pow(2) + dc.pow(2)).sqrt()
+        _SPATIAL_DIST_CACHE[key] = cached
+    return cached
+
+
 def _attn_record(inst: _AttnInst, attn_type: str, block_idx: int, timestep: float,
                  attn_weights: torch.Tensor, num_frames: int, patches_per_frame: int,
                  latent_h: int = 1, latent_w: int = 1):
@@ -343,23 +379,75 @@ def _attn_record(inst: _AttnInst, attn_type: str, block_idx: int, timestep: floa
     entropy = torch.cat(entropy_list)
     del entropy_list
 
-    # ── Temporal / spatial locality ─────────────────────────────────────
-    temporal_scores = torch.zeros(H_heads)
-    spatial_scores  = torch.zeros(H_heads)
+    # ── Temporal / spatial locality + frame-pair / patch-pair distance ──
+    # *_norm variants divide by the max possible distance (num_frames - 1
+    # for frames, the patch-grid diagonal for space) so runs at different
+    # durations/resolutions stay comparable — the raw fields alone aren't,
+    # since e.g. a mean frame distance of 3 means something different at
+    # num_frames=8 than at num_frames=32.
+    temporal_scores        = torch.zeros(H_heads)
+    spatial_scores         = torch.zeros(H_heads)
+    frame_dist_mean        = torch.zeros(H_heads)
+    frame_dist_std         = torch.zeros(H_heads)
+    frame_dist_mean_norm   = torch.zeros(H_heads)
+    frame_dist_std_norm    = torch.zeros(H_heads)
+    spatial_dist_mean      = torch.zeros(H_heads)
+    spatial_dist_std       = torch.zeros(H_heads)
+    spatial_dist_mean_norm = torch.zeros(H_heads)
+    spatial_dist_std_norm  = torch.zeros(H_heads)
 
     if attn_type == "sa" and patches_per_frame > 1 and num_frames > 1:
         expected = num_frames * patches_per_frame
         if Sq == expected and Sk == expected:
             F_, P = num_frames, patches_per_frame
+            dist_mat  = _get_frame_dist_matrix(F_).to(W.device)
+            frame_max = float(F_ - 1)  # num_frames > 1 guaranteed above
+
+            want_spatial_dist = (latent_h > 0 and latent_w > 0
+                                 and P == latent_h * latent_w)
+            if want_spatial_dist:
+                spatial_dist_mat = _get_spatial_dist_matrix(latent_h, latent_w).to(W.device)
+                spatial_max = math.sqrt(latent_h ** 2 + latent_w ** 2)
+
             for h0 in range(0, H_heads, CHUNK):
                 h1   = min(h0 + CHUNK, H_heads)
                 wc   = W[h0:h1].float()
                 W_r  = wc.view(h1 - h0, F_, P, F_, P)
-                intra = torch.diagonal(W_r, dim1=1, dim2=3)
+                intra = torch.diagonal(W_r, dim1=1, dim2=3)   # [chunk, Pq, Pk, F]
                 intra_m = intra.sum(dim=(1, 2, 3)).cpu()
                 spatial_scores[h0:h1]  = intra_m
                 temporal_scores[h0:h1] = 1.0 - intra_m
-                del wc, W_r, intra
+
+                # frame_mass[fq, fk] = total attention mass from all query
+                # patches in frame fq to all key patches in frame fk.
+                frame_mass = W_r.sum(dim=(2, 4))                      # [chunk, F, F]
+                total_mass = frame_mass.sum(dim=(1, 2)).clamp_min(1e-8)  # [chunk]
+                mean_d     = (frame_mass * dist_mat).sum(dim=(1, 2)) / total_mass
+                mean_d2    = (frame_mass * dist_mat.pow(2)).sum(dim=(1, 2)) / total_mass
+                var_d      = (mean_d2 - mean_d.pow(2)).clamp_min(0.0)
+                std_d      = var_d.sqrt()
+                frame_dist_mean[h0:h1]      = mean_d.cpu()
+                frame_dist_std[h0:h1]       = std_d.cpu()
+                frame_dist_mean_norm[h0:h1] = (mean_d / frame_max).cpu()
+                frame_dist_std_norm[h0:h1]  = (std_d / frame_max).cpu()
+
+                if want_spatial_dist:
+                    # spatial_mass[pq, pk] = same-frame attention mass
+                    # between query patch pq and key patch pk, summed
+                    # across frames.
+                    spatial_mass = intra.sum(dim=3)                       # [chunk, Pq, Pk]
+                    total_smass  = spatial_mass.sum(dim=(1, 2)).clamp_min(1e-8)
+                    mean_sd      = (spatial_mass * spatial_dist_mat).sum(dim=(1, 2)) / total_smass
+                    mean_sd2     = (spatial_mass * spatial_dist_mat.pow(2)).sum(dim=(1, 2)) / total_smass
+                    var_sd       = (mean_sd2 - mean_sd.pow(2)).clamp_min(0.0)
+                    std_sd       = var_sd.sqrt()
+                    spatial_dist_mean[h0:h1]      = mean_sd.cpu()
+                    spatial_dist_std[h0:h1]       = std_sd.cpu()
+                    spatial_dist_mean_norm[h0:h1] = (mean_sd / spatial_max).cpu()
+                    spatial_dist_std_norm[h0:h1]  = (std_sd / spatial_max).cpu()
+                    del spatial_mass, total_smass, mean_sd, mean_sd2, var_sd, std_sd
+
+                del wc, W_r, intra, frame_mass, total_mass, mean_d, mean_d2, var_d, std_d
 
     # ── Sink mass ───────────────────────────────────────────────────────
     sink_mass = (W[:, :, 0].mean(dim=-1) + W[:, :, -1].mean(dim=-1)).cpu()
@@ -388,15 +476,23 @@ def _attn_record(inst: _AttnInst, attn_type: str, block_idx: int, timestep: floa
     torch.cuda.empty_cache()
 
     entry = {
-        "map":       full_map,
-        "key_map":   key_map,
-        "query_map": query_map,
-        "entropy":   entropy,
-        "temporal":  temporal_scores,
-        "spatial":   spatial_scores,
-        "sink":      sink_mass,
-        "timestep":  timestep,
-        "step_idx":  step_idx,
+        "map":                    full_map,
+        "key_map":                key_map,
+        "query_map":              query_map,
+        "entropy":                entropy,
+        "temporal":               temporal_scores,
+        "spatial":                spatial_scores,
+        "sink":                   sink_mass,
+        "frame_dist_mean":        frame_dist_mean,
+        "frame_dist_std":         frame_dist_std,
+        "frame_dist_mean_norm":   frame_dist_mean_norm,
+        "frame_dist_std_norm":    frame_dist_std_norm,
+        "spatial_dist_mean":      spatial_dist_mean,
+        "spatial_dist_std":       spatial_dist_std,
+        "spatial_dist_mean_norm": spatial_dist_mean_norm,
+        "spatial_dist_std_norm":  spatial_dist_std_norm,
+        "timestep":               timestep,
+        "step_idx":               step_idx,
     }
 
     if block_idx not in store_dict:

@@ -140,7 +140,11 @@ class LTXAttentionKeyMap:
 
 class LTXAttentionMetricsViz:
 
-    METRICS = ["entropy", "temporal", "spatial", "sink"]
+    METRICS = ["entropy", "temporal", "spatial", "sink",
+              "frame_dist_mean", "frame_dist_std",
+              "frame_dist_mean_norm", "frame_dist_std_norm",
+              "spatial_dist_mean", "spatial_dist_std",
+              "spatial_dist_mean_norm", "spatial_dist_std_norm"]
 
     @classmethod
     def INPUT_TYPES(cls):

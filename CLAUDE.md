@@ -42,13 +42,13 @@ Attention map `W: [H, Sq, Sk] fp16`. Key map = `W.mean(dim=1)` (what's looked at
 ## Nodes by category
 
 ### Capture
-- **LTX Attn — Setup Capture** (`nodes/capture.py:LTXAttentionCaptureSetup`): Patches model to capture attention metrics (entropy/temporal/spatial/sink) plus reduced key/query maps, and optionally full attention maps per `store_mode` (`reduced`/`full_fp16`/`hybrid` + `full_blocks`/`target_heads` RAM filters). Geometry (num_frames/latent_h/latent_w) is auto-detected — no manual dims. Most nodes depend on a prior setup run, read via the `STORE_HANDLE` string output (a separate later run — see hook architecture note below).
+- **LTX Attn — Setup Capture** (`nodes/capture.py:LTXAttentionCaptureSetup`): Patches model to capture attention metrics (entropy/temporal/spatial/sink/frame_dist_mean/frame_dist_std/spatial_dist_mean/spatial_dist_std (+ frame_dist_*_norm/spatial_dist_*_norm, divided by max possible distance for cross-run comparability)) plus reduced key/query maps, and optionally full attention maps per `store_mode` (`reduced`/`full_fp16`/`hybrid` + `full_blocks`/`target_heads` RAM filters). Geometry (num_frames/latent_h/latent_w) is auto-detected — no manual dims. Most nodes depend on a prior setup run, read via the `STORE_HANDLE` string output (a separate later run — see hook architecture note below).
 - **LTX QKV — Capture Source** (`nodes/capture.py:LTXQKVCapture`): Captures raw Q/K/V tensors per-head.
 
 ### Visualization
 - **LTX Attn — Key Map** (`nodes/visualize.py:LTXAttentionKeyMap`): "What is being looked at?" — reduces query dim, reshapes keys to [F, H_lat, W_lat]. SA only.
 - **LTX Attn — Query Map** (`nodes/visualize.py:LTXAttentionQueryMap`): "Who is actively looking?" — reduces key dim, works for SA+CA.
-- **LTX Attn — Metrics Heatmap** (`nodes/visualize.py:LTXAttentionMetricsViz`): 2D heatmap [blocks × heads] for entropy/temporal/spatial/sink metrics. Returns IMAGE + stats string.
+- **LTX Attn — Metrics Heatmap** (`nodes/visualize.py:LTXAttentionMetricsViz`): 2D heatmap [blocks × heads] for entropy/temporal/spatial/sink/frame_dist_mean/frame_dist_std/spatial_dist_mean/spatial_dist_std (+ frame_dist_*_norm/spatial_dist_*_norm, divided by max possible distance for cross-run comparability) metrics. Returns IMAGE + stats string.
 - **LTX Attn — Grid Viz** (`nodes/visualize.py:LTXAttentionGridViz`): Full overview grid read from a `store_handle`. Views: key_map/query_map/diff. Supports frame modes: avg/all/sequence/specific frames. Normalize modes: global/per_cell/per_block/per_head.
 - **LTX Attn — Timestep Evolution** (`nodes/evolution.py`): Line chart of metric vs denoising step per head.
 

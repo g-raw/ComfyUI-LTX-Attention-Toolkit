@@ -90,10 +90,13 @@ one capture path, one `STORE_HANDLE`, real metrics in every mode.
 | `store_name` | STRING | Empty = new auto-named handle every run. Given a name, re-running reuses that same handle (get-or-create) instead of spawning `name_2`, `name_3`, … |
 | `reset_store` | BOOL | With a named `store_name`: clear that handle before capturing. With it blank, the handle is always fresh already, so this has no effect |
 
-`reduced` always includes the real `entropy`/`temporal`/`spatial`/`sink`
-metrics plus `key_map`/`query_map` (geometry auto-detected from the live
-latent — no manual frame/height/width inputs needed). `full_fp16`/`hybrid`
-additionally store the full `[H, Sq, Sk]` map for the relevant blocks.
+`reduced` always includes the real `entropy`/`temporal`/`spatial`/`sink`/
+`frame_dist_mean`/`frame_dist_std`/`spatial_dist_mean`/`spatial_dist_std`
+metrics (plus `_norm` variants of the last four, see below) and
+`key_map`/`query_map` (geometry auto-detected from the live latent — no
+manual frame/height/width inputs needed). `full_fp16`/`hybrid`
+additionally store the full
+`[H, Sq, Sk]` map for the relevant blocks.
 
 **Memory estimates (1280×720, 16 frames, 32 heads, 4 steps) :**
 
@@ -165,8 +168,20 @@ Set `key_token_idx` to isolate a specific text token.
 | `temporal` | High = attends across frames (motion/coherence head). |
 | `spatial` | High = attends within same frame (texture/structure head). |
 | `sink` | High = attention mass on first/last token (sink head). |
+| `frame_dist_mean` | Attention-mass-weighted average `\|frame_k - frame_q\|`, in frames (SA only). High = looks at temporally distant frames. |
+| `frame_dist_std` | Spread of that frame-distance distribution, in frames (SA only). High = mixes near and far frames; low = attends at a consistent temporal offset. |
+| `frame_dist_mean_norm` / `frame_dist_std_norm` | Same, divided by `num_frames - 1` so they stay in `[0, 1]` and comparable across runs with a different number of frames. |
+| `spatial_dist_mean` | Attention-mass-weighted average Euclidean distance, in patch units (same-frame pairs only), between query and key patch positions (SA only). High = looks at spatially distant tokens within the frame. |
+| `spatial_dist_std` | Spread of that spatial-distance distribution, in patch units (SA only). High = mixes near and far patches; low = attends at a consistent spatial offset. |
+| `spatial_dist_mean_norm` / `spatial_dist_std_norm` | Same, divided by the patch-grid diagonal `sqrt(latent_h² + latent_w²)` so they stay in `[0, 1]` and comparable across runs at a different spatial resolution. |
 
-`step_idx = -1` averages across all captured steps.
+`step_idx = -1` averages across all captured steps. All eight
+`frame_dist_*`/`spatial_dist_*` fields are `0` for cross-attention
+(frames/patch positions don't apply to text tokens) and whenever the SA
+map doesn't match the `num_frames × patches_per_frame` geometry. Prefer
+the `_norm` variants whenever comparing across runs that don't share the
+exact same `num_frames`/`latent_height`/`latent_width` — the raw values
+alone aren't apples-to-apples in that case.
 
 ---
 
@@ -273,16 +288,18 @@ session).
 
 #### `LTX Attn — Compare Runs` details
 
-Compares one metric (`entropy`/`temporal`/`spatial`/`sink`) between two
-captures, block-by-block and head-by-head, for self- or cross-attention.
-Reads both stores live from the registry by handle — to compare a dumped
-`.pt`, load it into a handle first with `Store Load`.
+Compares one metric — including the `_norm` variants of the distance
+metrics, which is what you want here if the two runs don't share the
+exact same `num_frames`/resolution — between two captures, block-by-block
+and head-by-head, for self- or cross-attention. Reads both stores live
+from the registry by handle — to compare a dumped `.pt`, load it into a
+handle first with `Store Load`.
 
 | Input | Type | Description |
 |---|---|---|
 | `store_handle_a` / `store_handle_b` | STRING | The two stores to compare |
 | `attn_type` | ENUM | `sa` / `ca` |
-| `metric` | ENUM | `entropy` / `temporal` / `spatial` / `sink` |
+| `metric` | ENUM | `entropy` / `temporal` / `spatial` / `sink` / `frame_dist_mean` / `frame_dist_std` / `frame_dist_mean_norm` / `frame_dist_std_norm` / `spatial_dist_mean` / `spatial_dist_std` / `spatial_dist_mean_norm` / `spatial_dist_std_norm` |
 | `step_idx` | INT | `-1` averages across all captured steps |
 | `top_k` | INT | How many `(block, head)` pairs to list, ranked by `\|diff_mode score\|` |
 | `norm_percentile` | FLOAT | Clip the heatmap color scale at this percentile of the diff_mode score (default 0.98) so a few outlier cells don't wash the rest out to white — `1.0` uses the true max |
