@@ -160,7 +160,13 @@ Set `key_token_idx` to isolate a specific text token.
 ---
 
 #### `LTX Attn — Metrics Heatmap`
-2D heatmap: **X = blocks, Y = heads, color = metric value**.
+2D heatmap: **X = blocks, Y = heads, color = metric value**. Always
+normalized per-image (min→max of whatever the metric's actual range is
+in this store — most of these metrics aren't natively in `[0, 1]`, so
+without normalizing the whole heatmap just clips to a single color) —
+a numeric colorbar is stamped along the bottom showing that literal
+`[min, max]` range, so the direction is never divorced from the
+magnitude.
 
 | Metric | Meaning |
 |---|---|

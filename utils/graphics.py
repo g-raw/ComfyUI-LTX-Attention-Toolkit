@@ -105,10 +105,20 @@ def draw_text(canvas: np.ndarray, text: str, x: int, y: int,
         cx += (3 + 1) * scale
 
 
+def _fmt_num(v: float) -> str:
+    """Fixed-point formatting (never scientific notation — the bitmap
+    font above has no 'e' glyph), precision scaled to magnitude."""
+    if abs(v) >= 100:
+        return f"{v:.1f}"
+    if abs(v) >= 1:
+        return f"{v:.2f}"
+    return f"{v:.4f}"
+
+
 def make_colorbar(clip_val: float, colormap: str, width: int = 240,
                   height: int = 34, scale: int = 2) -> np.ndarray:
     """Horizontal gradient strip from -clip_val (left) to +clip_val (right),
-    with numeric end labels and a center tick at zero."""
+    with numeric end labels and a center tick at zero. For signed diffs."""
     lut    = get_colormap(colormap)
     bar_h  = height - 10
     t      = np.linspace(0.0, 1.0, width, dtype=np.float32)
@@ -118,10 +128,31 @@ def make_colorbar(clip_val: float, colormap: str, width: int = 240,
     canvas[0:bar_h] = np.broadcast_to(strip, (bar_h, width, 3))
     canvas[bar_h:bar_h + 2, width // 2 - 1:width // 2 + 1] = 1.0  # zero tick
 
-    lo_label = f"-{clip_val:.3g}"
-    hi_label = f"+{clip_val:.3g}"
+    lo_label = f"-{_fmt_num(clip_val)}"
+    hi_label = f"+{_fmt_num(clip_val)}"
     draw_text(canvas, lo_label, 2, bar_h + 2, color=(1, 1, 1), scale=1)
     hi_x = max(width - (len(hi_label) * 4 * 1) - 2, width // 2 + 4)
+    draw_text(canvas, hi_label, hi_x, bar_h + 2, color=(1, 1, 1), scale=1)
+    return canvas
+
+
+def make_range_colorbar(vmin: float, vmax: float, colormap: str, width: int = 240,
+                        height: int = 34, scale: int = 2) -> np.ndarray:
+    """Horizontal gradient strip from vmin (left) to vmax (right), with
+    numeric end labels — for absolute-value heatmaps (not signed diffs),
+    e.g. Metrics Heatmap where 0 isn't a meaningful center point."""
+    lut    = get_colormap(colormap)
+    bar_h  = height - 10
+    t      = np.linspace(0.0, 1.0, width, dtype=np.float32)
+    idx    = (t * 255).astype(np.uint8)
+    strip  = lut[idx].astype(np.float32)
+    canvas = np.full((height, width, 3), 0.08, dtype=np.float32)
+    canvas[0:bar_h] = np.broadcast_to(strip, (bar_h, width, 3))
+
+    lo_label = _fmt_num(vmin)
+    hi_label = _fmt_num(vmax)
+    draw_text(canvas, lo_label, 2, bar_h + 2, color=(1, 1, 1), scale=1)
+    hi_x = max(width - (len(hi_label) * 4) - 2, width // 2 + 4)
     draw_text(canvas, hi_label, hi_x, bar_h + 2, color=(1, 1, 1), scale=1)
     return canvas
 

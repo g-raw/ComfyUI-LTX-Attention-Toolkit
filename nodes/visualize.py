@@ -5,7 +5,8 @@ import torch.nn.functional as F
 
 from ..core.stores    import AttentionStore, get_registry
 from ..utils.graphics import (get_colormap, apply_colormap_batch,
-                               add_grid_lines, render_head_grid)
+                               add_grid_lines, render_head_grid,
+                               make_range_colorbar, vstack_padded)
 from ..utils.helpers  import resolve_entry, parse_heads, log_node
 
 
@@ -156,7 +157,6 @@ class LTXAttentionMetricsViz:
             "colormap":  (["viridis","inferno","magma","plasma",
                            "hot","turbo","coolwarm"], {"default": "viridis"}),
             "cell_size": ("INT", {"default": 16, "min": 4, "max": 64}),
-            "normalize": ("BOOLEAN", {"default": True}),
         }}
 
     RETURN_TYPES = ("IMAGE", "STRING")
@@ -164,7 +164,7 @@ class LTXAttentionMetricsViz:
     FUNCTION     = "visualize"
     CATEGORY     = "g_raw/LTX/Profiler"
 
-    def visualize(self, store_handle, attn_type, metric, step_idx, colormap, cell_size, normalize):
+    def visualize(self, store_handle, attn_type, metric, step_idx, colormap, cell_size):
         if store_handle and store_handle.strip():
             get_registry().switch_attn(store_handle)
         store = AttentionStore()
@@ -196,11 +196,8 @@ class LTXAttentionMetricsViz:
                         else torch.zeros(n_heads))
             mat[:, col] = vals.numpy()
 
-        mat_disp = mat.copy()
-        if normalize:
-            mn, mx = mat_disp.min(), mat_disp.max()
-            if mx > mn:
-                mat_disp = (mat_disp - mn) / (mx - mn)
+        mn, mx = float(mat.min()), float(mat.max())
+        mat_disp = (mat - mn) / (mx - mn) if mx > mn else np.zeros_like(mat)
 
         colored   = apply_colormap_batch(mat_disp[np.newaxis], colormap)[0]
         out_h, out_w = n_heads * cell_size, n_blocks * cell_size
@@ -208,6 +205,8 @@ class LTXAttentionMetricsViz:
         colored_t = F.interpolate(colored_t, size=(out_h, out_w), mode="nearest")
         img_np    = colored_t.squeeze(0).permute(1,2,0).numpy()
         img_np    = add_grid_lines(img_np, cell_size, n_heads, n_blocks)
+        colorbar  = make_range_colorbar(mn, mx, colormap, width=out_w)
+        img_np    = vstack_padded([img_np, colorbar])
         out       = torch.from_numpy(img_np).unsqueeze(0).clamp(0.0, 1.0)
 
         top_k    = 5
@@ -218,7 +217,9 @@ class LTXAttentionMetricsViz:
         )
         stats = (
             f"Metric: {metric} | Type: {attn_type} | Step: {step_idx}\n"
-            f"Mean: {mat.mean():.4f}  Std: {mat.std():.4f}\n"
+            f"Mean: {mat.mean():.4f}  Std: {mat.std():.4f}  "
+            f"Min: {mn:.4f}  Max: {mx:.4f}\n"
+            f"Colorbar range: [{mn:.4f}, {mx:.4f}], see the bottom of the image\n"
             f"Top-{top_k}: {top_str}\n"
             f"Blocks: {block_indices}"
         )
