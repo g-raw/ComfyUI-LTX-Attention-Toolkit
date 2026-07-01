@@ -194,6 +194,8 @@ alone aren't apples-to-apples in that case.
 #### `LTX Attn — Grid Viz`
 Full overview grid read from a capture `STORE_HANDLE`.
 X = blocks, Y = heads, each cell = key_map, query_map, or their diff.
+Every 8th row/column gets a separator line, same as `Metrics Heatmap`/
+`Compare Runs`, to make it easier to count blocks/heads at a glance.
 
 `frame_mode` options:
 

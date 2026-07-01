@@ -427,6 +427,10 @@ class LTXAttentionGridViz:
                     grid[y0:y0+min(cell_h,12), 2:lbl_w-2] = (
                         lut_turbo[int(h_idx/31*255)])
                     grid[y0:y0+1, lbl_w:] = 0.3
+
+            grid = add_grid_lines(grid, cell_size=cell_w, n_rows=n_heads, n_cols=n_blocks,
+                                  cell_h=cell_h, cell_w=cell_w,
+                                  y_offset=lbl_h, x_offset=lbl_w, pad=pad)
             return grid
 
         # ── Selectors ───────────────────────────────────────────────────

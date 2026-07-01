@@ -174,17 +174,29 @@ def vstack_padded(images: list, pad_color: float = 0.08) -> np.ndarray:
 
 def add_grid_lines(img: np.ndarray, cell_size: int,
                    n_rows: int, n_cols: int,
-                   step_y: int = 8, step_x: int = 8) -> np.ndarray:
+                   step_y: int = 8, step_x: int = 8,
+                   cell_h: int = None, cell_w: int = None,
+                   y_offset: int = 0, x_offset: int = 0,
+                   pad: int = 0) -> np.ndarray:
+    """Draw a subtle separator line every step_y/step_x rows/cols, to
+    visually group blocks/heads in batches (e.g. every 8) for easier
+    reading of a large grid. cell_h/cell_w default to cell_size (square
+    cells, the common case); pass them explicitly plus y_offset/x_offset
+    (label margins) and pad (per-cell spacing) for grids that aren't a
+    flat cell_size x cell_size tiling, e.g. Grid Viz."""
+    cell_h = cell_size if cell_h is None else cell_h
+    cell_w = cell_size if cell_w is None else cell_w
     img        = img.copy()
     line_color = np.array([0.40, 0.40, 0.40], dtype=np.float32)
+    H, W = img.shape[:2]
     for row in range(0, n_rows, step_y):
-        y = row * cell_size
-        if 0 <= y < img.shape[0]:
-            img[y, :] = line_color
+        y = y_offset + row * (cell_h + pad)
+        if 0 <= y < H:
+            img[y, x_offset:] = line_color
     for col in range(0, n_cols, step_x):
-        x = col * cell_size
-        if 0 <= x < img.shape[1]:
-            img[:, x] = line_color
+        x = x_offset + col * (cell_w + pad)
+        if 0 <= x < W:
+            img[y_offset:, x] = line_color
     return img
 
 
