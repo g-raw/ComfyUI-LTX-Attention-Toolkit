@@ -24,10 +24,8 @@ class LTXStoreDump:
         return {"required": {
             "output_path":       ("STRING",  {"default": "ltx_store.pt"}),
             "include_full_maps": ("BOOLEAN", {"default": True}),
-            "store_handle":      ("STRING",  {"default": "",
-                                  "placeholder": "attn store (blank = current, if any)"}),
-            "qkv_handle":        ("STRING",  {"default": "",
-                                  "placeholder": "QKV store (blank = current, if any)"}),
+            "handle":            ("STRING",  {"default": "",
+                                  "placeholder": "store name (blank = current, if any)"}),
         }}
 
     RETURN_TYPES = ("STRING",)
@@ -36,14 +34,14 @@ class LTXStoreDump:
     CATEGORY     = "g_raw/LTX/Profiler"
     OUTPUT_NODE  = True
 
-    def dump(self, output_path, include_full_maps, store_handle, qkv_handle):
+    def dump(self, output_path, include_full_maps, handle):
         reg     = get_registry()
         payload = {}
         summary = []
 
-        attn_h = store_handle.strip()
-        if attn_h:
-            inst = reg._get_attn(attn_h)  # explicit handle: raise clearly if it's a typo
+        h = handle.strip()
+        if h:
+            inst = reg._get_attn(h)  # explicit handle: raise clearly if it's a typo
         elif reg._cur_attn:
             inst = reg._get_attn(reg._cur_attn)
         else:
@@ -58,9 +56,12 @@ class LTXStoreDump:
             n_ca = sum(len(s) for s in inst.ca.values())
             summary.append(f"attn '{inst.name}' SA:{n_sa} CA:{n_ca}")
 
-        qkv_h = qkv_handle.strip()
-        if qkv_h:
-            qinst = reg._get_qkv(qkv_h)
+        # Same name as the attn store, since Setup Capture's single
+        # `handle` output covers both -- but QKV is optional (only
+        # exists if capture_qkv was on), so a miss here isn't a typo,
+        # just silently skip instead of raising like the attn lookup.
+        if h:
+            qinst = reg._qkv.get(h)
         elif reg._cur_qkv:
             qinst = reg._get_qkv(reg._cur_qkv)
         else:
@@ -71,8 +72,8 @@ class LTXStoreDump:
 
         if not payload:
             raise ValueError(
-                "[Dump] No attn or QKV store to save — give store_handle/qkv_handle, "
-                "or capture something first."
+                f"[Dump] No attn or QKV store found under handle '{h}' — "
+                "capture something first."
             )
 
         torch.save(payload, output_path)
@@ -86,32 +87,29 @@ class LTXStoreLoad:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "input_path":   ("STRING",  {"default": "ltx_store.pt"}),
-            "merge":        ("BOOLEAN", {"default": False}),
-            "store_handle": ("STRING",  {"default": "",
-                             "placeholder": "name for the attn store (blank = 'default')"}),
-            "qkv_handle":   ("STRING",  {"default": "",
-                             "placeholder": "name for the QKV store (blank = 'default')"}),
+            "input_path": ("STRING",  {"default": "ltx_store.pt"}),
+            "merge":      ("BOOLEAN", {"default": False}),
+            "handle":     ("STRING",  {"default": "",
+                           "placeholder": "name for the store (blank = 'default')"}),
         }}
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING")
-    RETURN_NAMES = ("summary", "store_handle", "qkv_handle")
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("summary", "handle")
     FUNCTION     = "load"
     CATEGORY     = "g_raw/LTX/Profiler"
     OUTPUT_NODE  = True
 
-    def load(self, input_path, merge, store_handle, qkv_handle):
+    def load(self, input_path, merge, handle):
         if not os.path.isfile(input_path):
             raise FileNotFoundError(f"[LTXProfiler/Load] File not found: {input_path}")
         payload = torch.load(input_path, map_location="cpu", weights_only=False)
         reg = get_registry()
 
-        summary_parts   = []
-        out_store_handle = ""
-        out_qkv_handle    = ""
+        name          = handle.strip() or "default"
+        summary_parts = []
 
         if "attn" in payload:
-            handle = reg.create(store_handle.strip() or "default")
+            reg.create(name)
             store  = AttentionStore()
             section = payload["attn"]
             if not merge:
@@ -126,13 +124,12 @@ class LTXStoreLoad:
             n_sa = sum(len(s) for s in store.sa.values())
             n_ca = sum(len(s) for s in store.ca.values())
             summary_parts.append(
-                f"attn '{handle}': SA {len(store.sa)} blocks {n_sa} entries | "
+                f"attn '{name}': SA {len(store.sa)} blocks {n_sa} entries | "
                 f"CA {len(store.ca)} blocks {n_ca} entries"
             )
-            out_store_handle = handle
 
         if "qkv" in payload:
-            handle = reg.create_qkv(qkv_handle.strip() or "default")
+            reg.create_qkv(name)
             qstore  = QKVStore()
             section = payload["qkv"]
             if not merge:
@@ -142,12 +139,11 @@ class LTXStoreLoad:
             else:
                 for blk, steps in section["data"].items():
                     qstore.data.setdefault(blk, {}).update(steps)
-            summary_parts.append(f"qkv '{handle}' loaded")
-            out_qkv_handle = handle
+            summary_parts.append(f"qkv '{name}' loaded")
 
         if not summary_parts:
             raise ValueError(f"[Load] '{input_path}' contains neither an attn nor a QKV section.")
 
         summary = f"Loaded: {input_path}\n" + "\n".join(summary_parts)
         print(f"[LTXProfiler] {summary}")
-        return (summary, out_store_handle, out_qkv_handle)
+        return (summary, name)

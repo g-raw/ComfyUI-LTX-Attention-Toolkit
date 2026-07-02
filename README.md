@@ -121,10 +121,12 @@ sparse map — put that block in `full_blocks` instead if you need those.
 | `full_fp16` (5 blocks) | ~16 GB |
 | `hybrid` (5 full + 43 reduced) | ~16.3 GB |
 
-Outputs a **patched MODEL**, a **`STORE_HANDLE`** string, and a
-**`QKV_STORE_HANDLE`** string (empty if `capture_qkv` is off) — plug the
-model between loader and KSampler, and type the handle(s) into any
-visualization/intervention node's handle widget in a later run (see
+Outputs a **patched MODEL** and a single **`handle`** STRING — the same
+name is used for both the attn store and (if `capture_qkv` is on) the
+QKV store, since they live in independent registry namespaces and can't
+collide. Plug the model between loader and KSampler, and type `handle`
+into any visualization/intervention node's `store_handle`/`qkv_handle`
+widget in a later run (see
 "Hook architecture" below for why this is a separate-run handle rather
 than a wired socket).
 
@@ -262,7 +264,7 @@ the model maintains long-range temporal coherence.
 
 ---
 
-#### `LTX QKV — Transfer`
+#### `LTX Attn — QKV Transfer`
 Injects Q/K/V from a source generation into a target generation.
 
 `targets` uses the same format as `Head Freeze`'s `targets` (both parsed
@@ -297,8 +299,9 @@ Transfer modes (combinable):
 `sim_filter`: only transfer tokens where Q_target ≈ Q_source
 (cosine similarity threshold) — useful for content-preserving transfer.
 
-`qkv_handle` (STRING, optional): target a specific named QKV store.
-Blank = whichever QKV store is currently active.
+`handle` (STRING, optional): target a specific named QKV store — the
+same `handle` string output by Setup Capture. Blank = whichever QKV
+store is currently active.
 
 **To disable, don't select any transfer flag (or blank `targets`) —
 don't use ComfyUI's node bypass/mute.** Same reasoning as `Head
@@ -314,25 +317,26 @@ instead.
 
 | Node | Description |
 |---|---|
-| `LTX — Store Dump` | Save the AttentionStore and/or QKVStore to one `.pt` |
-| `LTX — Store Load` | Load AttentionStore and/or QKVStore sections from a `.pt` |
+| `LTX Attn — Store Dump` | Save the AttentionStore and/or QKVStore to one `.pt` |
+| `LTX Attn — Store Load` | Load AttentionStore and/or QKVStore sections from a `.pt` |
 | `LTX Attn — Compare Runs` | Diff heatmap + ranked (block, head) table for one metric between two runs |
 | `LTX Attn — Head Candidates` | Combine several metrics' zscore diff into one composite score, shortlist candidate + control (block, head) groups |
 | `LTX Attn — Store Inspect` | Print AttentionStore contents (incl. key/query map presence) |
-| `LTX QKV — Store Inspect` | Print QKVStore contents |
-| `LTX — Latent Dims` | Extract T/H/W from a LATENT |
+| `LTX Attn — QKV Store Inspect` | Print QKVStore contents |
+| `LTX Attn — Latent Dims` | Extract T/H/W from a LATENT |
 
-`Store Dump`/`Store Load` take optional `store_handle` (attn) and
-`qkv_handle` (QKV) STRING inputs, each independent — give one, the
-other, or both. On dump, an empty handle falls back to whichever store
-of that type is currently active, and that store type is silently
-omitted from the file if none resolves (not an error, unless *neither*
-resolves). On load, each section present in the file goes into the
-named handle (`"default"` if blank, get-or-create); `Store Load`
-returns the resolved `store_handle`/`qkv_handle` as outputs so you can
-wire them straight into downstream nodes instead of retyping them.
-Explicit but nonexistent handles raise clearly (a typo isn't silently
-swallowed). This matters once multiple stores coexist — parallel
+`Store Dump`/`Store Load` take a single `handle` STRING input — the
+same name is used to resolve both the attn store and the QKV store,
+mirroring Setup Capture's unified `handle` output. On dump, an empty
+handle falls back to whichever stores are currently active; an explicit
+handle raises clearly if no attn store exists under that name (a typo
+isn't silently swallowed), but a missing QKV store under that name is
+silently skipped (capture_qkv may simply have been off for that run) —
+the dump still succeeds as long as at least one of the two resolves. On
+load, each section present in the file goes into that name (`"default"`
+if blank, get-or-create); `Store Load` returns the resolved `handle` as
+an output so you can wire it straight into downstream nodes instead of
+retyping it. This matters once multiple stores coexist — parallel
 branches, multiple captures in one session.
 
 #### `LTX Attn — Compare Runs` details
@@ -455,10 +459,10 @@ the candidate shortlist.
 # Step 1: capture source
 [Load LTX] → [Setup Capture, capture_qkv=True, qkv_targets="24:8,12,16 | 32:8,12,16"]
            → [KSampler, prompt="chrome robot on rails"]
-           → [Store Dump, qkv_handle=<from Setup Capture> → "source.pt"]
+           → [Store Dump, handle=<from Setup Capture> → "source.pt"]
 
 # Step 2: transfer to target
-[Load LTX] → [Store Load ← "source.pt"]  (wire its qkv_handle output)
+[Load LTX] → [Store Load ← "source.pt"]  (wire its handle output)
            → [QKV Transfer, targets="24:8,12,16", use_k=True, use_v=True, blend=0.7]
            → [KSampler, prompt="golden robot on rails"]
            → [Save Video]

@@ -187,7 +187,7 @@ class LTXQKVTransfer:
             "sim_filter":         ("BOOLEAN", {"default": False}),
             "sim_threshold":      ("FLOAT",   {"default": 0.3,
                                    "min": -1.0, "max": 1.0, "step": 0.05}),
-            "qkv_handle":         ("STRING",  {"default": "", "placeholder": "select QKV store..."}),
+            "handle":             ("STRING",  {"default": "", "placeholder": "select store..."}),
         }}
 
     RETURN_TYPES = ("MODEL",)
@@ -233,7 +233,7 @@ class LTXQKVTransfer:
     def apply_transfer(self, model, attn_type, targets,
                        source_step, transfer_from_step, transfer_to_step,
                        blend, use_map, use_q, use_k, use_v,
-                       sim_filter, sim_threshold, qkv_handle):
+                       sim_filter, sim_threshold, handle):
 
         if use_map:
             use_q = use_k = use_v = False
@@ -243,8 +243,8 @@ class LTXQKVTransfer:
             return self._disable(model, "targets is blank")
 
         reg = get_registry()
-        if qkv_handle and qkv_handle.strip():
-            reg.switch_qkv(qkv_handle)
+        if handle and handle.strip():
+            reg.switch_qkv(handle)
         elif not reg._cur_qkv:
             reg.switch_qkv(reg.create_qkv("default"))
 

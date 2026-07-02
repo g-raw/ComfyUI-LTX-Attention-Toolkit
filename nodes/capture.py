@@ -70,8 +70,11 @@ class LTXAttentionCaptureSetup:
             "reset_store":     ("BOOLEAN", {"default": True}),
         }}
 
-    RETURN_TYPES = ("MODEL", "STORE_HANDLE", "QKV_STORE_HANDLE")
-    RETURN_NAMES = ("patched_model", "store_handle", "qkv_handle")
+    # STRING, not a custom type -- must match the plain STRING handle
+    # inputs on every downstream node (Head Freeze, QKV Transfer, Grid
+    # Viz, Store Dump/Load, ...), or ComfyUI refuses the connection.
+    RETURN_TYPES = ("MODEL", "STRING")
+    RETURN_NAMES = ("patched_model", "handle")
     FUNCTION     = "setup"
     CATEGORY     = "g_raw/LTX/Profiler"
 
@@ -151,9 +154,11 @@ class LTXAttentionCaptureSetup:
             "target_block_map": qkv_target_map,
         }
 
-        qkv_handle = ""
         if capture_qkv:
-            qkv_inst = reg.create_and_get_qkv(store_name if store_name else None)
+            # Same name as the attn store -- one handle covers both,
+            # since StoreRegistry keeps attn/QKV in separate namespaces
+            # anyway (no collision risk).
+            qkv_inst = reg.create_and_get_qkv(handle)
             if reset_store:
                 qkv_inst.reset_data()
             qkv_inst.cfg = {
@@ -162,7 +167,6 @@ class LTXAttentionCaptureSetup:
                 "capture_sa":       capture_sa,
                 "capture_ca":       capture_ca,
             }
-            qkv_handle = qkv_inst.name
 
         install_hook()
         patched = model.clone()
@@ -184,7 +188,7 @@ class LTXAttentionCaptureSetup:
             targets_str = ", ".join(
                 f"b{b}h{sorted(hs)}" for b, hs in sorted(qkv_target_map.items())
             )
-            qkv_line = f"{qkv_handle} ({targets_str})"
+            qkv_line = f"{handle} ({targets_str})"
 
         print(
             f"[LTXProfiler] CaptureSetup\n"
@@ -195,4 +199,4 @@ class LTXAttentionCaptureSetup:
             f"  Store : {handle}\n"
             f"  QKV   : {qkv_line}"
         )
-        return (patched, handle, qkv_handle)
+        return (patched, handle)
