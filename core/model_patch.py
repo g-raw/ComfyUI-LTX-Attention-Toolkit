@@ -23,6 +23,12 @@ def _make_block_hook(block_idx: int, timestep_ref: list,
         to["_profiler_latent_w"]          = w_lat_ref[0]
         to["_profiler_capture_sa"]        = cfg.get("capture_sa", True)
         to["_profiler_capture_ca"]        = cfg.get("capture_ca", True)
+        if cfg.get("capture_qkv"):
+            to["_qkv_block_idx"]      = block_idx
+            to["_qkv_capture_active"] = True
+            to["_qkv_capture_sa"]     = cfg.get("capture_sa", True)
+            to["_qkv_capture_ca"]     = cfg.get("capture_ca", True)
+            to["_qkv_timestep"]       = timestep_ref[0]
         reset_call_count(block_idx)
         new_args = {**args, "transformer_options": to}
         if existing_hook is not None:

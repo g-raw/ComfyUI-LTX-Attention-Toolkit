@@ -1,10 +1,9 @@
-from .nodes.capture         import LTXAttentionCaptureSetup, LTXQKVCapture
+from .nodes.capture         import LTXAttentionCaptureSetup
 from .nodes.transfer        import LTXAttentionHeadFreeze, LTXQKVTransfer
 from .nodes.visualize       import (LTXAttentionQueryMap, LTXAttentionKeyMap,
                                    LTXAttentionMetricsViz, LTXAttentionGridViz)
 from .nodes.evolution       import LTXAttentionTimestepEvolution
-from .nodes.io              import (LTXAttentionStoreDump, LTXAttentionStoreLoad,
-                                   LTXQKVDump, LTXQKVLoad)
+from .nodes.io              import LTXStoreDump, LTXStoreLoad
 from .nodes.inspect         import LTXAttentionStoreInspect, LTXQKVStoreInspect
 from .nodes.utils           import (LTXLatentDims, LTXAttentionCompareRuns,
                                    LTXAttentionHeadCandidates)
@@ -14,7 +13,6 @@ from .nodes.rf_inversion    import LTXRFForwardSampler, LTXRFReverseSampler
 NODE_CLASS_MAPPINGS = {
     # Capture
     "LTXAttentionCaptureSetup":      LTXAttentionCaptureSetup,
-    "LTXQKVCapture":                 LTXQKVCapture,
     # Transfer / Intervention
     "LTXAttentionHeadFreeze":        LTXAttentionHeadFreeze,
     "LTXQKVTransfer":                LTXQKVTransfer,
@@ -26,10 +24,8 @@ NODE_CLASS_MAPPINGS = {
     "LTXAttentionTimestepEvolution": LTXAttentionTimestepEvolution,
     "LTXAttentionZoneAnalysis":      LTXAttentionZoneAnalysis,
     # IO
-    "LTXAttentionStoreDump":         LTXAttentionStoreDump,
-    "LTXAttentionStoreLoad":         LTXAttentionStoreLoad,
-    "LTXQKVDump":                    LTXQKVDump,
-    "LTXQKVLoad":                    LTXQKVLoad,
+    "LTXStoreDump":                  LTXStoreDump,
+    "LTXStoreLoad":                  LTXStoreLoad,
     # Inspect / Debug
     "LTXAttentionStoreInspect":      LTXAttentionStoreInspect,
     "LTXQKVStoreInspect":            LTXQKVStoreInspect,
@@ -44,7 +40,6 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXAttentionCaptureSetup":      "LTX Attn — Setup Capture",
-    "LTXQKVCapture":                 "LTX QKV — Capture Source",
     "LTXAttentionHeadFreeze":        "LTX Attn — Head Freeze",
     "LTXQKVTransfer":                "LTX QKV — Transfer",
     "LTXAttentionQueryMap":          "LTX Attn — Query Map",
@@ -53,10 +48,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXAttentionGridViz":           "LTX Attn — Grid Viz",
     "LTXAttentionTimestepEvolution": "LTX Attn — Timestep Evolution",
     "LTXAttentionZoneAnalysis":      "LTX Attn — Zone Analysis",
-    "LTXAttentionStoreDump":         "LTX Attn — Store Dump",
-    "LTXAttentionStoreLoad":         "LTX Attn — Store Load",
-    "LTXQKVDump":                    "LTX QKV — Dump",
-    "LTXQKVLoad":                    "LTX QKV — Load",
+    "LTXStoreDump":                  "LTX — Store Dump",
+    "LTXStoreLoad":                  "LTX — Store Load",
     "LTXAttentionStoreInspect":      "LTX Attn — Store Inspect",
     "LTXQKVStoreInspect":            "LTX QKV — Store Inspect",
     "LTXLatentDims":                 "LTX — Latent Dims",

@@ -1,11 +1,9 @@
 from __future__ import annotations
-import types
-import warnings
 
-from ..core.stores      import get_registry, AttentionStore, QKVStore
+from ..core.stores      import get_registry
 from ..core.hooks       import install_hook
 from ..core.model_patch import wrap_diffusion_model, unwrap_diffusion_model
-from ..utils.helpers    import parse_int_set, reset_call_count, parse_block_head_pairs
+from ..utils.helpers    import parse_int_set, parse_block_head_pairs
 
 
 class LTXAttentionCaptureSetup:
@@ -19,6 +17,19 @@ class LTXAttentionCaptureSetup:
             "target_blocks":   ("STRING",  {"default": "0,8,16,24,32,40,47"}),
             "target_heads":    ("STRING",  {"default": "all"}),
             "capture_steps":   ("STRING",  {"default": "all"}),
+            "capture_qkv":     ("BOOLEAN", {"default": False,
+                               "tooltip": "Also capture raw Q/K/V per head into a QKV store, "
+                                          "for QKV Transfer. Not redundant with store_mode's "
+                                          "full attention map: the map only replays the exact "
+                                          "historical pattern, raw Q/K/V lets QKV Transfer "
+                                          "recombine components from two different generations "
+                                          "into a new pattern."}),
+            "qkv_target_heads": ("STRING", {"default": "8,12,16",
+                               "tooltip": "Heads to capture raw Q/K/V for (separate from "
+                                          "target_heads above -- raw Q/K/V per head is much "
+                                          "more expensive than the metrics/key/query maps, so "
+                                          "this stays a narrow list by default even though "
+                                          "target_heads defaults to 'all')."}),
             "store_mode":      (["reduced", "full_fp16", "hybrid"],
                                {"default": "reduced",
                                 "tooltip": "reduced: metrics + key/query maps only\n"
@@ -51,13 +62,14 @@ class LTXAttentionCaptureSetup:
             "store_name":      ("STRING",  {"default": ""}),
         }}
 
-    RETURN_TYPES = ("MODEL", "STORE_HANDLE")
-    RETURN_NAMES = ("patched_model", "store_handle")
+    RETURN_TYPES = ("MODEL", "STORE_HANDLE", "QKV_STORE_HANDLE")
+    RETURN_NAMES = ("patched_model", "store_handle", "qkv_handle")
     FUNCTION     = "setup"
     CATEGORY     = "g_raw/LTX/Profiler"
 
     def setup(self, model, capture_sa, capture_ca, target_blocks, target_heads,
-              capture_steps, store_mode, full_blocks, full_targets, map_downsample,
+              capture_steps, capture_qkv, qkv_target_heads,
+              store_mode, full_blocks, full_targets, map_downsample,
               reset_store, store_name):
 
         # Validate reset_store is a boolean
@@ -95,8 +107,8 @@ class LTXAttentionCaptureSetup:
                 heads = range(32) if hd == "all" else (hd,)
                 full_target_map.setdefault(blk, set()).update(heads)
 
-        # Create/use named store via StoreRegistry (atomic to avoid race)
-        reg = get_registry()
+        # Create/use named store(s) via StoreRegistry (atomic to avoid race)
+        reg  = get_registry()
         inst = reg.create_and_get_attn(store_name if store_name else None)
         if reset_store:
             inst.reset_data()
@@ -104,16 +116,32 @@ class LTXAttentionCaptureSetup:
         handle = inst.name
 
         inst.cfg = {
-            "capture_sa":    capture_sa,
-            "capture_ca":    capture_ca,
-            "target_blocks": parsed_blocks,
-            "target_heads":  parsed_heads,
-            "capture_steps": parsed_steps,
+            "capture_sa":      capture_sa,
+            "capture_ca":      capture_ca,
+            "target_blocks":   parsed_blocks,
+            "target_heads":    parsed_heads,
+            "capture_steps":   parsed_steps,
+            "capture_qkv":     capture_qkv,
             "store_mode":      store_mode,
             "full_blocks":     full_block_set,
             "full_target_map": full_target_map,
             "map_downsample":  map_downsample,
         }
+
+        qkv_handle = ""
+        if capture_qkv:
+            parsed_qkv_heads = parse_int_set(qkv_target_heads)
+            qkv_inst = reg.create_and_get_qkv(store_name if store_name else None)
+            if reset_store:
+                qkv_inst.reset_data()
+            qkv_inst.cfg = {
+                "target_blocks": parsed_blocks,
+                "target_heads":  parsed_qkv_heads,
+                "capture_steps": parsed_steps,
+                "capture_sa":    capture_sa,
+                "capture_ca":    capture_ca,
+            }
+            qkv_handle = qkv_inst.name
 
         install_hook()
         patched = model.clone()
@@ -136,124 +164,8 @@ class LTXAttentionCaptureSetup:
             f"  Blocks : {sorted(parsed_blocks)}{full_summary}\n"
             f"  Heads : {'all' if parsed_heads is None else sorted(parsed_heads)}\n"
             f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}\n"
-            f"  Store : {handle}"
+            f"  Store : {handle}\n"
+            f"  QKV   : {qkv_handle or '(off)'}"
+            f"{' heads='+str(sorted(parsed_qkv_heads)) if capture_qkv and parsed_qkv_heads else ''}"
         )
-        return (patched, handle)
-
-
-class LTXQKVCapture:
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {
-            "model":         ("MODEL",),
-            "target_blocks": ("STRING", {"default": "24"}),
-            "target_heads":  ("STRING", {"default": "8,12,16"}),
-            "capture_steps": ("STRING", {"default": "all"}),
-            "capture_sa":    ("BOOLEAN", {"default": True}),
-            "capture_ca":    ("BOOLEAN", {"default": False}),
-            "reset_store":   ("BOOLEAN", {"default": True}),
-            "store_name":    ("STRING",  {"default": ""}),
-        }}
-
-    RETURN_TYPES = ("MODEL", "QKV_STORE_HANDLE")
-    RETURN_NAMES = ("capture_model", "qkv_handle")
-    FUNCTION     = "setup"
-    CATEGORY     = "g_raw/LTX/Profiler"
-
-    def setup(self, model, target_blocks, target_heads,
-              capture_steps, capture_sa, capture_ca, reset_store, store_name):
-
-        parsed_blocks = parse_int_set(target_blocks, range(48)) or set(range(48))
-        parsed_heads  = parse_int_set(target_heads)
-        parsed_steps  = parse_int_set(capture_steps)
-
-        # Create/use named QKV store via StoreRegistry (atomic to avoid race)
-        reg = get_registry()
-        qkv_inst = reg.create_and_get_qkv(store_name if store_name else None)
-        qkv_handle = qkv_inst.name
-        if reset_store:
-            qkv_inst.reset_data()
-
-        qkv_inst.cfg = {
-            "target_blocks": parsed_blocks,
-            "target_heads":  parsed_heads,
-            "capture_steps": parsed_steps,
-            "capture_sa":    capture_sa,
-            "capture_ca":    capture_ca,
-        }
-
-        install_hook()
-        patched      = model.clone()
-        dm           = patched.model.diffusion_model
-        unwrap_diffusion_model(dm)
-
-        original_forward = dm._forward
-        step_counters    = {}
-        timestep_ref     = [0.0]
-
-        def patched_forward(self_dm, x, timestep, context, attention_mask,
-                            frame_rate=25, transformer_options={},
-                            keyframe_idxs=None, **kwargs):
-
-            ts_val = float(
-                (timestep[0] if isinstance(timestep, (list, tuple))
-                 else timestep).mean().item()
-            )
-            timestep_ref[0] = ts_val
-
-            patches_replace = dict(transformer_options.get("patches_replace", {}))
-            dit_replace     = dict(patches_replace.get("dit", {}))
-
-            for blk_idx in parsed_blocks:
-                if blk_idx not in step_counters:
-                    step_counters[blk_idx] = 0
-                current_step           = step_counters[blk_idx]
-                step_counters[blk_idx] += 1
-
-                if parsed_steps is not None and current_step not in parsed_steps:
-                    continue
-
-                existing = dit_replace.get(("double_block", blk_idx))
-
-                def make_hook(bidx, sidx, existing_h):
-                    def hook(args, orig):
-                        to = dict(args.get("transformer_options", {}))
-                        to["_qkv_block_idx"]      = bidx
-                        to["_qkv_step_idx"]       = sidx
-                        to["_qkv_capture_active"] = True
-                        to["_qkv_capture_sa"]     = capture_sa
-                        to["_qkv_capture_ca"]     = capture_ca
-                        to["_qkv_timestep"]       = timestep_ref[0]
-                        reset_call_count(bidx)
-                        new_args = {**args, "transformer_options": to}
-                        if existing_h and not getattr(existing_h, "_is_capture_hook", False):
-                            return existing_h(new_args, orig)
-                        return orig["original_block"](new_args)
-                    hook._is_capture_hook = True
-                    return hook
-
-                dit_replace[("double_block", blk_idx)] = make_hook(
-                    blk_idx, current_step, existing
-                )
-
-            patches_replace["dit"] = dit_replace
-            transformer_options    = {**transformer_options,
-                                      "patches_replace": patches_replace}
-            return original_forward(
-                x, timestep, context, attention_mask,
-                frame_rate, transformer_options, keyframe_idxs, **kwargs,
-            )
-
-        dm._forward                   = types.MethodType(patched_forward, dm)
-        dm._profiler_patched          = True
-        dm._profiler_original_forward = original_forward
-
-        print(
-            f"[LTXProfiler] QKVCapture\n"
-            f"  Blocks : {sorted(parsed_blocks)}\n"
-            f"  Heads : {'all' if parsed_heads is None else sorted(parsed_heads)}\n"
-            f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}\n"
-            f"  Store : {qkv_handle}"
-        )
-        return (patched, qkv_handle)
+        return (patched, handle, qkv_handle)

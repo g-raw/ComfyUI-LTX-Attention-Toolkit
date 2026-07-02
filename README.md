@@ -52,13 +52,13 @@ nodes_ltx_attention_profiler/
 │   └── qkv_transfer.py      ← Q/K/V substitution transfer
 │
 ├── nodes/
-│   ├── capture.py           ← CaptureSetup (metrics + key/query/full maps), QKVCapture
+│   ├── capture.py           ← CaptureSetup (metrics + key/query/full maps + optional raw QKV)
 │   ├── transfer.py          ← HeadFreeze, QKVTransfer
 │   ├── visualize.py         ← QueryMap, KeyMap, MetricsViz, GridViz
 │   ├── evolution.py         ← TimestepEvolution
-│   ├── io.py                ← Dump/Load (Attn + QKV)
+│   ├── io.py                ← StoreDump/StoreLoad (Attn + QKV, one file)
 │   ├── inspect.py           ← Store inspect nodes
-│   └── utils.py             ← LatentDims, CompareRuns
+│   └── utils.py             ← LatentDims, CompareRuns, HeadCandidates
 │
 └── utils/
     ├── graphics.py          ← Colormaps, grid rendering, Bresenham
@@ -73,23 +73,25 @@ nodes_ltx_attention_profiler/
 
 #### `LTX Attn — Setup Capture`
 Patches an LTX-2.3 model to capture attention metrics, reduced
-key/query maps, and (optionally) full attention maps during inference —
-one capture path, one `STORE_HANDLE`, real metrics in every mode.
+key/query maps, optionally full attention maps, and optionally raw
+Q/K/V — one capture path, one node, real metrics in every mode.
 
 | Input | Type | Description |
 |---|---|---|
 | `model` | MODEL | LTX model to patch |
-| `capture_sa` | BOOL | Capture self-attention |
-| `capture_ca` | BOOL | Capture cross-attention (video→text) |
-| `target_blocks` | STRING | `"all"` or `"0,8,16,24,32,40,47"` |
-| `target_heads` | STRING | `"all"` or `"8,12,16"` — RAM filter |
-| `capture_steps` | STRING | `"all"` or `"0,1,2,3"` |
+| `capture_sa` | BOOL | Capture self-attention (applies to both the metrics and the QKV capture below) |
+| `capture_ca` | BOOL | Capture cross-attention (video→text), same scope |
+| `target_blocks` | STRING | `"all"` or `"0,8,16,24,32,40,47"` — shared by metrics and QKV capture |
+| `target_heads` | STRING | `"all"` or `"8,12,16"` — RAM filter for the metrics/key/query maps |
+| `capture_steps` | STRING | `"all"` or `"0,1,2,3"` — shared by metrics and QKV capture |
 | `store_mode` | ENUM | `reduced` / `full_fp16` / `hybrid` |
 | `full_blocks` | STRING | Blocks stored at full res (every head) when `hybrid`. A block also listed in `full_targets` uses that block's per-head selection instead; `full_blocks` still applies normally to any block `full_targets` doesn't cover — the two combine |
 | `full_targets` | STRING | Optional, `hybrid` only — for the blocks listed here, restrict full-map storage to specific `(block, head)` pairs instead of every head. Same format as `Head Freeze`'s `targets`: paste `Head Candidates`' `candidates_csv`, or type `block:head \| block:head \| ...` |
 | `map_downsample` | INT | Spatial downsample factor for full maps |
-| `store_name` | STRING | Empty = new auto-named handle every run. Given a name, re-running reuses that same handle (get-or-create) instead of spawning `name_2`, `name_3`, … |
-| `reset_store` | BOOL | With a named `store_name`: clear that handle before capturing. With it blank, the handle is always fresh already, so this has no effect |
+| `capture_qkv` | BOOL | Also capture raw Q/K/V per head into a separate QKV store, for `QKV Transfer` |
+| `qkv_target_heads` | STRING | Heads to capture raw Q/K/V for — kept separate from `target_heads` above, since raw Q/K/V per head is far more expensive than the metrics/key/query maps. Default `"8,12,16"` |
+| `store_name` | STRING | Empty = new auto-named handle every run. Given a name, re-running reuses that same handle (get-or-create) instead of spawning `name_2`, `name_3`, … Applies to both the attn and the QKV store — they can't collide, they live in separate registries |
+| `reset_store` | BOOL | With a named `store_name`: clear that handle (both stores) before capturing. With it blank, the handle is always fresh already, so this has no effect |
 
 `reduced` always includes the real `entropy`/`temporal`/`spatial`/`sink`/
 `frame_dist_mean`/`frame_dist_std`/`spatial_dist_mean`/`spatial_dist_std`
@@ -107,6 +109,9 @@ and don't care which form it is; `Query Map`/`Key Map`/`Zone Analysis`
 need every head and will raise (or silently skip that block/step) on a
 sparse map — put that block in `full_blocks` instead if you need those.
 
+**`capture_qkv` is not redundant with `full_fp16`/`hybrid`** — see
+"Attention map vs. raw Q/K/V" in Architecture notes below for why.
+
 **Memory estimates (1280×720, 16 frames, 32 heads, 4 steps) :**
 
 | Mode | RAM |
@@ -115,26 +120,12 @@ sparse map — put that block in `full_blocks` instead if you need those.
 | `full_fp16` (5 blocks) | ~16 GB |
 | `hybrid` (5 full + 43 reduced) | ~16.3 GB |
 
-Outputs a **patched MODEL** and a **`STORE_HANDLE`** string — plug the
-model between loader and KSampler, and type the handle into any
-visualization/intervention node's `store_handle` widget in a later run
-(see "Hook architecture" below for why this is a separate-run handle
-rather than a wired socket).
-
----
-
-#### `LTX QKV — Capture Source`
-Captures raw Q, K, V tensors for use with `LTX QKV — Transfer`.
-
-| Input | Type | Description |
-|---|---|---|
-| `target_blocks` | STRING | Blocks to capture |
-| `target_heads` | STRING | `"all"` or `"8,12,16"` |
-| `capture_steps` | STRING | Steps to capture |
-| `capture_sa` | BOOL | Capture self-attention QKV |
-| `capture_ca` | BOOL | Capture cross-attention QKV |
-| `store_name` | STRING | Empty = new auto-named handle every run; given a name, re-running reuses that same handle |
-| `reset_store` | BOOL | With a named `store_name`, clear that handle before capturing |
+Outputs a **patched MODEL**, a **`STORE_HANDLE`** string, and a
+**`QKV_STORE_HANDLE`** string (empty if `capture_qkv` is off) — plug the
+model between loader and KSampler, and type the handle(s) into any
+visualization/intervention node's handle widget in a later run (see
+"Hook architecture" below for why this is a separate-run handle rather
+than a wired socket).
 
 ---
 
@@ -322,21 +313,26 @@ instead.
 
 | Node | Description |
 |---|---|
-| `LTX Attn — Store Dump` | Save AttentionStore to `.pt` |
-| `LTX Attn — Store Load` | Load `.pt` into AttentionStore |
-| `LTX QKV — Dump` | Save QKVStore to `.pt` |
-| `LTX QKV — Load` | Load `.pt` into QKVStore |
+| `LTX — Store Dump` | Save the AttentionStore and/or QKVStore to one `.pt` |
+| `LTX — Store Load` | Load AttentionStore and/or QKVStore sections from a `.pt` |
 | `LTX Attn — Compare Runs` | Diff heatmap + ranked (block, head) table for one metric between two runs |
 | `LTX Attn — Head Candidates` | Combine several metrics' zscore diff into one composite score, shortlist candidate + control (block, head) groups |
 | `LTX Attn — Store Inspect` | Print AttentionStore contents (incl. key/query map presence) |
 | `LTX QKV — Store Inspect` | Print QKVStore contents |
 | `LTX — Latent Dims` | Extract T/H/W from a LATENT |
 
-All Dump/Load nodes take an optional `store_handle`/`qkv_handle` STRING
-input to target a specific named store instead of implicitly acting on
-whichever store is currently active in the registry — important once
-multiple stores coexist (parallel branches, multiple captures in one
-session).
+`Store Dump`/`Store Load` take optional `store_handle` (attn) and
+`qkv_handle` (QKV) STRING inputs, each independent — give one, the
+other, or both. On dump, an empty handle falls back to whichever store
+of that type is currently active, and that store type is silently
+omitted from the file if none resolves (not an error, unless *neither*
+resolves). On load, each section present in the file goes into the
+named handle (`"default"` if blank, get-or-create); `Store Load`
+returns the resolved `store_handle`/`qkv_handle` as outputs so you can
+wire them straight into downstream nodes instead of retyping them.
+Explicit but nonexistent handles raise clearly (a typo isn't silently
+swallowed). This matters once multiple stores coexist — parallel
+branches, multiple captures in one session.
 
 #### `LTX Attn — Compare Runs` details
 
@@ -456,13 +452,14 @@ the candidate shortlist.
 
 ```
 # Step 1: capture source
-[Load LTX] → [QKV Capture, blocks="24,32", heads="8,12,16"]
+[Load LTX] → [Setup Capture, capture_qkv=True, target_blocks="24,32",
+              qkv_target_heads="8,12,16"]
            → [KSampler, prompt="chrome robot on rails"]
-           → [QKV Dump → "source.pt"]
+           → [Store Dump, qkv_handle=<from Setup Capture> → "source.pt"]
 
 # Step 2: transfer to target
-[Load LTX] → [QKV Load ← "source.pt"]
-           → [QKV Transfer, use_k=True, use_v=True, blend=0.7]
+[Load LTX] → [Store Load ← "source.pt"]  (wire its qkv_handle output)
+           → [QKV Transfer, targets="24:8,12,16", use_k=True, use_v=True, blend=0.7]
            → [KSampler, prompt="golden robot on rails"]
            → [Save Video]
 ```
@@ -491,6 +488,23 @@ W : [H=32, Sq, Sk]   (self-attention)
 Key map   = W.mean(dim=1) → [Sk]  "what is being looked at"
 Query map = W.mean(dim=2) → [Sq]  "who is actively looking"
 ```
+
+### Attention map vs. raw Q/K/V
+
+`Setup Capture`'s `store_mode=full_fp16`/`hybrid` (the attention map
+`W = softmax(QK^T)`) and its `capture_qkv` toggle (raw Q/K/V, before the
+softmax) capture genuinely different things — one doesn't substitute for
+the other:
+
+- **Attention map** — lets you *replay* the exact historical pattern
+  later: `Head Freeze` and `QKV Transfer`'s `use_map` mode both just
+  reuse the stored `W` against the *current* run's V
+  (`ops/freeze.py`/`ops/qkv_transfer.py:98`).
+- **Raw Q/K/V** — lets `QKV Transfer`'s `use_q`/`use_k`/`use_v` modes
+  *recombine* components from two different generations and recompute a
+  brand new `softmax(Q_eff·K_eff^T)·V_eff` (`ops/qkv_transfer.py:126-130`)
+  — something no stored map alone can do, since softmax is lossy: you
+  can't reconstruct Q/K from a saved `W`.
 
 ### Hook architecture
 A single universal hook is installed on both
