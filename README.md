@@ -298,6 +298,14 @@ Transfer modes (combinable):
 `qkv_handle` (STRING, optional): target a specific named QKV store.
 Blank = whichever QKV store is currently active.
 
+**To disable, don't select any transfer flag (or blank `target_blocks`)
+— don't use ComfyUI's node bypass/mute.** Same reasoning as `Head
+Freeze`: this node patches the shared `diffusion_model` directly, and
+bypass/mute skips this node's cleanup entirely, so a stale patch from
+an earlier run stays in effect. Turning off every `use_*` flag, or
+blanking `target_blocks`, still runs the node's code and reliably
+unwraps instead.
+
 ---
 
 ### IO & Debug

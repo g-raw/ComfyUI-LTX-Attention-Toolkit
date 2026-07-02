@@ -220,6 +220,20 @@ class LTXQKVTransfer:
             block_list = [int(x.strip()) for x in target_blocks.split(",") if x.strip()]
         return {blk: resolve_heads(blk, head_indices) for blk in block_list}
 
+    @staticmethod
+    def _disable(model, reason: str):
+        """Clone + unwrap + pass through untouched. diffusion_model is
+        shared across every model.clone() in the session, so silently
+        returning the input `model` here (as this used to do) can leave a
+        previous run's transfer patch in effect -- same class of bug as
+        Head Freeze's blank-targets fix. Reached only when this node's own
+        code actually runs (unlike ComfyUI's bypass/mute, which skips it
+        entirely and can't clean up a stale patch either)."""
+        print(f"[LTXProfiler] QKVTransfer: {reason}, passing model through unmodified.")
+        patched = model.clone()
+        unwrap_diffusion_model(patched.model.diffusion_model)
+        return (patched,)
+
     def apply_transfer(self, model, attn_type, target_blocks, head_indices,
                        source_step, transfer_from_step, transfer_to_step,
                        blend, use_map, use_q, use_k, use_v,
@@ -228,8 +242,7 @@ class LTXQKVTransfer:
         if use_map:
             use_q = use_k = use_v = False
         if not any([use_map, use_q, use_k, use_v]):
-            print("[Transfer] No component selected.")
-            return (model,)
+            return self._disable(model, "no component selected")
 
         reg = get_registry()
         if qkv_handle and qkv_handle.strip():
@@ -245,6 +258,8 @@ class LTXQKVTransfer:
             target_blocks, head_indices, qkv_store, attn_type, source_step
         )
         if not block_head_map:
+            if not target_blocks.strip():
+                return self._disable(model, "target_blocks is blank")
             raise ValueError(f"[Transfer] No blocks resolved from '{target_blocks}'.")
 
         # Validation
