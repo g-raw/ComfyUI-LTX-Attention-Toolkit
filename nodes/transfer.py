@@ -19,12 +19,13 @@ class LTXAttentionHeadFreeze:
                                               "the same run. Paste Head Candidates' "
                                               "candidates_csv directly (one 'block,head' per "
                                               "line), or type manually as "
-                                              "'block:head | block:head | ...'. Leave blank to "
-                                              "disable the freeze entirely -- this is the "
-                                              "reliable way to turn it off; ComfyUI's node "
-                                              "bypass/mute skips this node's cleanup, so the "
-                                              "diffusion_model (shared across runs) can be left "
-                                              "patched from a previous run."}),
+                                              "'block:head | block:head | ...'. Use 'block:all' "
+                                              "to freeze every captured head of that block in "
+                                              "one entry. Leave blank to disable the freeze "
+                                              "entirely -- this is the reliable way to turn it "
+                                              "off; ComfyUI's node bypass/mute skips this node's "
+                                              "cleanup, so the diffusion_model (shared across "
+                                              "runs) can be left patched from a previous run."}),
             "freeze_from_step":   ("INT",   {"default": 3,  "min": 0, "max": 255}),
             "freeze_step_source": ("INT",   {"default": 3,  "min": 0, "max": 255}),
             "attn_type":          (["sa"],  {"default": "sa"}),
@@ -68,7 +69,7 @@ class LTXAttentionHeadFreeze:
         # Resolve each target's frozen map up front, grouped by block so a
         # single hook can freeze several heads of the same block at once.
         block_configs: dict[int, list] = {}
-        for block_idx, head_idx in pairs:
+        for block_idx, head_sel in pairs:
             if block_idx not in src:
                 raise ValueError(f"[Freeze] Block {block_idx} not found in store.")
             if freeze_step_source not in src[block_idx]:
@@ -80,16 +81,27 @@ class LTXAttentionHeadFreeze:
             entry_map = entry.get("map")
             if entry_map is None:
                 raise ValueError("[Freeze] No map. Re-run with store_mode=full_fp16 (or hybrid).")
-            if isinstance(entry_map, dict) and head_idx not in entry_map:
-                raise ValueError(
-                    f"[Freeze] Block {block_idx} was captured with full_targets "
-                    f"(specific heads only) and head {head_idx} wasn't one of them. "
-                    f"Heads available for this block: {sorted(entry_map.keys())}."
-                )
-            block_configs.setdefault(block_idx, []).append({
-                "head_idx":   head_idx,
-                "frozen_map": entry_map[head_idx].float(),
-            })
+
+            # "all" -> every head actually captured for this block (the
+            # sparse dict's keys if hybrid+full_targets, else every row
+            # of the dense tensor).
+            if head_sel == "all":
+                head_list = (sorted(entry_map.keys()) if isinstance(entry_map, dict)
+                            else list(range(entry_map.shape[0])))
+            else:
+                if isinstance(entry_map, dict) and head_sel not in entry_map:
+                    raise ValueError(
+                        f"[Freeze] Block {block_idx} was captured with full_targets "
+                        f"(specific heads only) and head {head_sel} wasn't one of them. "
+                        f"Heads available for this block: {sorted(entry_map.keys())}."
+                    )
+                head_list = [head_sel]
+
+            for head_idx in head_list:
+                block_configs.setdefault(block_idx, []).append({
+                    "head_idx":   head_idx,
+                    "frozen_map": entry_map[head_idx].float(),
+                })
 
         patched       = model.clone()
         dm            = patched.model.diffusion_model
@@ -134,7 +146,10 @@ class LTXAttentionHeadFreeze:
         dm._forward                   = types.MethodType(patched_forward, dm)
         dm._profiler_patched          = True
         dm._profiler_original_forward = original_fwd
-        summary = ", ".join(f"b{b}h{h}" for b, h in pairs)
+        summary = ", ".join(
+            f"b{b}h{cfg['head_idx']}"
+            for b, cfgs in block_configs.items() for cfg in cfgs
+        )
         print(
             f"[LTXProfiler] HeadFreeze targets=[{summary}] "
             f"from_step={freeze_from_step} src_step={freeze_step_source} "

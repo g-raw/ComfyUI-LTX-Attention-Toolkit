@@ -243,7 +243,7 @@ that block).
 
 | Input | Type | Description |
 |---|---|---|
-| `targets` | STRING | One or more `(block, head)` pairs. Paste `Head Candidates`' `candidates_csv` directly (one `block,head` per line), or type manually as `block:head \| block:head \| ...`. Blank = disable (see below) |
+| `targets` | STRING | One or more `(block, head)` pairs. Paste `Head Candidates`' `candidates_csv` directly (one `block,head` per line), or type manually as `block:head \| block:head \| ...` — use `block:all` to freeze every captured head of a block in one entry. Blank = disable (see below) |
 | `freeze_from_step` | INT | Step at which freeze activates |
 | `freeze_step_source` | INT | Which captured step's map to use |
 | `blend_weight` | FLOAT | 1.0 = pure frozen, 0.5 = 50/50 blend — shared across every target, no per-head override yet |

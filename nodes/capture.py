@@ -88,7 +88,12 @@ class LTXAttentionCaptureSetup:
         if full_targets.strip():
             full_target_map = {}
             for blk, hd in parse_block_head_pairs(full_targets):
-                full_target_map.setdefault(blk, set()).add(hd)
+                # "all" here just duplicates full_blocks for that one block
+                # (no store exists yet to resolve "all" against captured
+                # heads, unlike Head Freeze) -- supported for consistency
+                # with Head Freeze's syntax, but full_blocks is simpler.
+                heads = range(32) if hd == "all" else (hd,)
+                full_target_map.setdefault(blk, set()).update(heads)
 
         # Create/use named store via StoreRegistry (atomic to avoid race)
         reg = get_registry()
