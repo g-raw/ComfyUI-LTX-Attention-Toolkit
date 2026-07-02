@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 import threading
 from typing import Optional
 
@@ -72,6 +73,24 @@ def parse_int_set(s: str, all_range: Optional[range] = None) -> Optional[set]:
     if not result:
         return None
     return result
+
+
+def parse_block_head_pairs(s: str) -> list:
+    """Parse a list of (block, head) pairs from either the Head Candidates
+    CSV output ('block,head' one per line) or a compact manual entry
+    ('block:head | block:head | ...'), or any mix of the two."""
+    pairs = []
+    for tok in re.split(r"[\n|]+", s):
+        tok = tok.strip()
+        if not tok:
+            continue
+        parts = re.split(r"[,:]", tok)
+        if len(parts) != 2:
+            raise ValueError(
+                f"Bad target '{tok}', expected 'block,head' or 'block:head'."
+            )
+        pairs.append((int(parts[0].strip()), int(parts[1].strip())))
+    return pairs
 
 
 def log_node(node_name: str, attn_type: str, block_idx: int,

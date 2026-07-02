@@ -153,11 +153,10 @@ def _make_full_hook(original_fn):
             )
 
         # ── 4. Head Freeze ───────────────────────────────────────────────────
-        if to.get("_freeze_head_idx") is not None and is_sa:
+        if to.get("_freeze_configs") and is_sa:
             return apply_head_freeze(
                 q, k, v, heads,
-                to["_freeze_head_idx"],
-                to["_freeze_map"],
+                to["_freeze_configs"],
                 to.get("_freeze_blend", 1.0),
                 original_fn, args, kwargs,
                 attn_precision, transformer_options,

@@ -53,7 +53,7 @@ Attention map `W: [H, Sq, Sk] fp16`. Key map = `W.mean(dim=1)` (what's looked at
 - **LTX Attn — Timestep Evolution** (`nodes/evolution.py`): Line chart of metric vs denoising step per head.
 
 ### Intervention
-- **LTX Attn — Head Freeze** (`nodes/transfer.py:LTXAttentionHeadFreeze`): Locks attention map for a specific head from a pivot step. Requires prior capture with `store_mode=full_fp16` (or `hybrid` for that block). Single head per instance. Optional `store_handle` to target a specific named store.
+- **LTX Attn — Head Freeze** (`nodes/transfer.py:LTXAttentionHeadFreeze`): Locks attention map(s) from a pivot step. Requires prior capture with `store_mode=full_fp16` (or `hybrid` for that block). `targets` STRING accepts multiple `(block, head)` pairs in one node instance (parsed by `utils/helpers.py:parse_block_head_pairs`, accepts both Head Candidates' `candidates_csv` and manual `block:head | block:head` entry) — `freeze_from_step`/`freeze_step_source`/`blend_weight` are shared across all targets, no per-head override yet. Optional `store_handle` to target a specific named store.
 - **LTX QKV — Transfer** (`nodes/transfer.py:LTXQKVTransfer`): Injects Q/K/V from source generation into target. Supports multi-block, multi-head targeting. Modes: use_k+use_v (style), use_map (raw softmax), full QKV replace. `sim_filter` for content-preserving transfer via cosine similarity gating. Optional `qkv_handle` to target a specific named QKV store.
 
 ### IO & Debug

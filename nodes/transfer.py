@@ -5,7 +5,7 @@ from ..core.stores      import AttentionStore, QKVStore, get_registry
 from ..core.hooks       import install_hook
 from ..core.model_patch import unwrap_diffusion_model
 from ..ops.freeze       import make_freeze_hook
-from ..utils.helpers    import parse_int_set, reset_call_count
+from ..utils.helpers    import parse_int_set, reset_call_count, parse_block_head_pairs
 
 
 class LTXAttentionHeadFreeze:
@@ -14,13 +14,18 @@ class LTXAttentionHeadFreeze:
     def INPUT_TYPES(cls):
         return {"required": {
             "model":              ("MODEL",),
-            "block_idx":          ("INT",   {"default": 24, "min": 0, "max": 47}),
-            "head_idx":           ("INT",   {"default": 8,  "min": 0, "max": 31}),
+            "targets":            ("STRING", {"default": "24:8", "multiline": True,
+                                   "tooltip": "One or more (block, head) pairs to freeze in "
+                                              "the same run. Paste Head Candidates' "
+                                              "candidates_csv directly (one 'block,head' per "
+                                              "line), or type manually as "
+                                              "'block:head | block:head | ...'."}),
             "freeze_from_step":   ("INT",   {"default": 3,  "min": 0, "max": 255}),
             "freeze_step_source": ("INT",   {"default": 3,  "min": 0, "max": 255}),
             "attn_type":          (["sa"],  {"default": "sa"}),
             "blend_weight":       ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0,
-                                   "step": 0.05}),
+                                   "step": 0.05,
+                                   "tooltip": "Shared across all targets — no per-head override yet."}),
             "store_handle":       ("STRING", {"default": "", "placeholder": "select store..."}),
         }}
 
@@ -29,7 +34,7 @@ class LTXAttentionHeadFreeze:
     FUNCTION     = "apply_freeze"
     CATEGORY     = "g_raw/LTX/Profiler"
 
-    def apply_freeze(self, model, block_idx, head_idx, freeze_from_step,
+    def apply_freeze(self, model, targets, freeze_from_step,
                      freeze_step_source, attn_type, blend_weight, store_handle):
 
         reg = get_registry()
@@ -41,18 +46,29 @@ class LTXAttentionHeadFreeze:
         store = AttentionStore()
         src   = store.sa if attn_type == "sa" else store.ca
 
-        if block_idx not in src:
-            raise ValueError(f"[Freeze] Block {block_idx} not found in store.")
-        if freeze_step_source not in src[block_idx]:
-            raise ValueError(
-                f"[Freeze] Step {freeze_step_source} not found. "
-                f"Available: {sorted(src[block_idx].keys())}"
-            )
-        entry = src[block_idx][freeze_step_source]
-        if entry.get("map") is None:
-            raise ValueError("[Freeze] No map. Re-run with store_mode=full_fp16 (or hybrid).")
+        pairs = parse_block_head_pairs(targets)
+        if not pairs:
+            raise ValueError("[Freeze] No (block, head) targets parsed from 'targets'.")
 
-        frozen_map    = entry["map"][head_idx].float()
+        # Resolve each target's frozen map up front, grouped by block so a
+        # single hook can freeze several heads of the same block at once.
+        block_configs: dict[int, list] = {}
+        for block_idx, head_idx in pairs:
+            if block_idx not in src:
+                raise ValueError(f"[Freeze] Block {block_idx} not found in store.")
+            if freeze_step_source not in src[block_idx]:
+                raise ValueError(
+                    f"[Freeze] Step {freeze_step_source} not found for block {block_idx}. "
+                    f"Available: {sorted(src[block_idx].keys())}"
+                )
+            entry = src[block_idx][freeze_step_source]
+            if entry.get("map") is None:
+                raise ValueError("[Freeze] No map. Re-run with store_mode=full_fp16 (or hybrid).")
+            block_configs.setdefault(block_idx, []).append({
+                "head_idx":   head_idx,
+                "frozen_map": entry["map"][head_idx].float(),
+            })
+
         patched       = model.clone()
         dm            = patched.model.diffusion_model
         original_fwd  = dm._forward
@@ -64,23 +80,25 @@ class LTXAttentionHeadFreeze:
 
             patches_replace = dict(transformer_options.get("patches_replace", {}))
             dit_replace     = dict(patches_replace.get("dit", {}))
-            existing        = dit_replace.get(("double_block", block_idx))
 
-            if block_idx not in step_counters:
-                step_counters[block_idx] = 0
-            current_step             = step_counters[block_idx]
-            step_counters[block_idx] += 1
+            for block_idx, freeze_configs in block_configs.items():
+                existing = dit_replace.get(("double_block", block_idx))
 
-            if current_step >= freeze_from_step:
-                dit_replace[("double_block", block_idx)] = make_freeze_hook(
-                    block_idx, head_idx, frozen_map, blend_weight,
-                    existing_hook=existing,
-                )
-            else:
-                if existing is not None:
-                    dit_replace[("double_block", block_idx)] = existing
+                if block_idx not in step_counters:
+                    step_counters[block_idx] = 0
+                current_step             = step_counters[block_idx]
+                step_counters[block_idx] += 1
+
+                if current_step >= freeze_from_step:
+                    dit_replace[("double_block", block_idx)] = make_freeze_hook(
+                        block_idx, freeze_configs, blend_weight,
+                        existing_hook=existing,
+                    )
                 else:
-                    dit_replace.pop(("double_block", block_idx), None)
+                    if existing is not None:
+                        dit_replace[("double_block", block_idx)] = existing
+                    else:
+                        dit_replace.pop(("double_block", block_idx), None)
 
             patches_replace["dit"] = dit_replace
             transformer_options    = {**transformer_options,
@@ -91,8 +109,9 @@ class LTXAttentionHeadFreeze:
             )
 
         dm._forward = types.MethodType(patched_forward, dm)
+        summary = ", ".join(f"b{b}h{h}" for b, h in pairs)
         print(
-            f"[LTXProfiler] HeadFreeze b={block_idx} h={head_idx} "
+            f"[LTXProfiler] HeadFreeze targets=[{summary}] "
             f"from_step={freeze_from_step} src_step={freeze_step_source} "
             f"blend={blend_weight}"
         )

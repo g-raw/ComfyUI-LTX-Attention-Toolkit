@@ -225,19 +225,25 @@ Useful to identify:
 ### Intervention
 
 #### `LTX Attn — Head Freeze`
-Locks the attention map of a specific head starting from a pivot step.
+Locks the attention map of one or more heads starting from a pivot step
+— a single node instance can target several `(block, head)` pairs at
+once (no need to chain one node per head).
 
 Requires a prior capture run with `store_mode=full_fp16` (or `hybrid` for
 that block).
 
 | Input | Type | Description |
 |---|---|---|
-| `block_idx` | INT | Target transformer block |
-| `head_idx` | INT | Target head |
+| `targets` | STRING | One or more `(block, head)` pairs. Paste `Head Candidates`' `candidates_csv` directly (one `block,head` per line), or type manually as `block:head \| block:head \| ...` |
 | `freeze_from_step` | INT | Step at which freeze activates |
 | `freeze_step_source` | INT | Which captured step's map to use |
-| `blend_weight` | FLOAT | 1.0 = pure frozen, 0.5 = 50/50 blend |
+| `blend_weight` | FLOAT | 1.0 = pure frozen, 0.5 = 50/50 blend — shared across every target, no per-head override yet |
 | `store_handle` | STRING | Optional — target a specific named store. Blank = whichever store is currently active |
+
+`freeze_from_step`/`freeze_step_source`/`blend_weight` apply to every
+target the same way. If you need different values per head, chain
+multiple `Head Freeze` nodes instead — `targets` only saves the chaining
+when the shared settings are fine.
 
 **Effect on head 8, block 24:**
 Prevents the temporal window from shrinking during denoising →
@@ -405,7 +411,7 @@ the candidate shortlist.
 
 # Step 2: apply freeze
 [Load LTX] → [Store Load ← "ref.pt"]
-           → [Head Freeze, block=24, head=8, from_step=3]
+           → [Head Freeze, targets="24:8", from_step=3]
            → [KSampler] → [Save Video]
 ```
 
