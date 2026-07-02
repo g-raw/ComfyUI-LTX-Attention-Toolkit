@@ -159,16 +159,19 @@ class LTXAttentionZoneAnalysis:
         if not src:
             raise ValueError(f"[ZoneAnalysis] Store {attn_type} is empty.")
 
-        # ── Check that maps exist ────────────────────────────────
+        # ── Check that dense (multi-head) maps exist ─────────────────────
+        # A sparse {head_idx: tensor} map (hybrid + full_targets, specific
+        # heads only) doesn't count — this analysis needs every head.
         has_maps = any(
-            e.get("map") is not None
+            isinstance(e.get("map"), torch.Tensor)
             for steps in src.values()
             for e in steps.values()
         )
         if not has_maps:
             raise ValueError(
-                "[ZoneAnalysis] No complete maps found.\n"
-                "Re-run capture with store_mode=full_fp16 (or hybrid)."
+                "[ZoneAnalysis] No complete (all-heads) maps found.\n"
+                "Re-run capture with store_mode=full_fp16, or hybrid with "
+                "full_blocks (not full_targets, which only stores specific heads)."
             )
 
         P = latent_height * latent_width
@@ -224,8 +227,8 @@ class LTXAttentionZoneAnalysis:
 
             for sk in target_steps:
                 entry = steps_data[sk]
-                if entry.get("map") is None:
-                    continue
+                if not isinstance(entry.get("map"), torch.Tensor):
+                    continue  # None, or a sparse hybrid+full_targets dict
 
                 W = entry["map"].float()      # [H, Sq, Sk] fp32 CPU
                 H_h, Sq, Sk = W.shape

@@ -40,14 +40,20 @@ class LTXAttentionStoreInspect:
                     continue
                 last     = steps[max(steps.keys())]
                 n_heads  = len(last.get("entropy", []))
-                has_map  = last.get("map") is not None
+                map_val  = last.get("map")
                 has_kq   = last.get("key_map") is not None and last.get("query_map") is not None
                 ts       = last.get("timestep", "?")
                 ts_str   = f"{ts:.3f}" if isinstance(ts, float) else str(ts)
+                if isinstance(map_val, dict):
+                    map_str = f"present (sparse, heads={sorted(map_val.keys())})"
+                elif map_val is not None:
+                    map_str = f"present {list(map_val.shape)}"
+                else:
+                    map_str = "absent"
                 lines.append(
                     f"  Block {blk:2d}: {len(steps)} steps | "
                     f"{n_heads} heads | ts≈{ts_str} | "
-                    f"map={'present '+str(list(last['map'].shape)) if has_map else 'absent'} | "
+                    f"map={map_str} | "
                     f"key/query_map={'present' if has_kq else 'absent'}"
                 )
 

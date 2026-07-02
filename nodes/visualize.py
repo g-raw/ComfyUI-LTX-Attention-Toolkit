@@ -47,6 +47,14 @@ class LTXAttentionQueryMap:
         src   = store.sa if attn_type == "sa" else store.ca
         entry = resolve_entry(src, block_idx, step_idx, attn_type)
 
+        if isinstance(entry["map"], dict):
+            raise ValueError(
+                "[QueryMap] This block/step was captured with full_targets "
+                "(hybrid mode, specific heads only) — no dense multi-head map "
+                "available here. Use Head Freeze / QKV Transfer (they index a "
+                "single head either way), or re-capture with store_mode="
+                "full_fp16 or full_blocks for full multi-head inspection."
+            )
         W               = entry["map"].float()
         H_heads, Sq, Sk = W.shape
         head_list       = parse_heads(head_indices, H_heads)
@@ -111,6 +119,14 @@ class LTXAttentionKeyMap:
         store = AttentionStore()
         entry = resolve_entry(store.sa, block_idx, step_idx, "sa")
 
+        if isinstance(entry["map"], dict):
+            raise ValueError(
+                "[KeyMap] This block/step was captured with full_targets "
+                "(hybrid mode, specific heads only) — no dense multi-head map "
+                "available here. Use Head Freeze / QKV Transfer (they index a "
+                "single head either way), or re-capture with store_mode="
+                "full_fp16 or full_blocks for full multi-head inspection."
+            )
         W               = entry["map"].float()
         H_heads, Sq, Sk = W.shape
         head_list       = parse_heads(head_indices, H_heads)

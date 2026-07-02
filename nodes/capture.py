@@ -5,7 +5,7 @@ import warnings
 from ..core.stores      import get_registry, AttentionStore, QKVStore
 from ..core.hooks       import install_hook
 from ..core.model_patch import wrap_diffusion_model, unwrap_diffusion_model
-from ..utils.helpers    import parse_int_set, reset_call_count
+from ..utils.helpers    import parse_int_set, reset_call_count, parse_block_head_pairs
 
 
 class LTXAttentionCaptureSetup:
@@ -25,7 +25,20 @@ class LTXAttentionCaptureSetup:
                                            "full_fp16: + full attention map for every target block\n"
                                            "hybrid: full map only for full_blocks, reduced elsewhere"}),
             "full_blocks":     ("STRING",  {"default": "8,16,24,32,40",
-                               "tooltip": "Blocks stored at full resolution in hybrid mode."}),
+                               "tooltip": "Blocks stored at full resolution in hybrid mode. "
+                                          "Ignored when full_targets is non-empty."}),
+            "full_targets":    ("STRING",  {"default": "", "multiline": True,
+                               "tooltip": "Optional, hybrid mode only: restrict full-map storage "
+                                          "to specific (block, head) pairs instead of every head "
+                                          "of full_blocks -- saves RAM when you already know which "
+                                          "heads you'll feed into Head Freeze. Paste Head "
+                                          "Candidates' candidates_csv directly (one 'block,head' "
+                                          "per line), or type manually as "
+                                          "'block:head | block:head | ...'. Blocks/heads not "
+                                          "listed here won't have a full map available, so "
+                                          "Query Map/Key Map/Zone Analysis on them will error or "
+                                          "skip -- use Head Freeze/QKV Transfer for those, or "
+                                          "leave this blank and use full_blocks instead."}),
             "map_downsample":  ("INT",     {"default": 1, "min": 1, "max": 64}),
             "reset_store":     ("BOOLEAN", {"default": True}),
             "store_name":      ("STRING",  {"default": ""}),
@@ -37,7 +50,7 @@ class LTXAttentionCaptureSetup:
     CATEGORY     = "g_raw/LTX/Profiler"
 
     def setup(self, model, capture_sa, capture_ca, target_blocks, target_heads,
-              capture_steps, store_mode, full_blocks, map_downsample,
+              capture_steps, store_mode, full_blocks, full_targets, map_downsample,
               reset_store, store_name):
 
         # Validate reset_store is a boolean
@@ -64,6 +77,12 @@ class LTXAttentionCaptureSetup:
         parsed_steps   = parse_int_set(capture_steps)
         full_block_set = {int(x.strip()) for x in full_blocks.split(",") if x.strip()}
 
+        full_target_map = None
+        if full_targets.strip():
+            full_target_map = {}
+            for blk, hd in parse_block_head_pairs(full_targets):
+                full_target_map.setdefault(blk, set()).add(hd)
+
         # Create/use named store via StoreRegistry (atomic to avoid race)
         reg = get_registry()
         inst = reg.create_and_get_attn(store_name if store_name else None)
@@ -78,9 +97,10 @@ class LTXAttentionCaptureSetup:
             "target_blocks": parsed_blocks,
             "target_heads":  parsed_heads,
             "capture_steps": parsed_steps,
-            "store_mode":    store_mode,
-            "full_blocks":   full_block_set,
-            "map_downsample": map_downsample,
+            "store_mode":      store_mode,
+            "full_blocks":     full_block_set,
+            "full_target_map": full_target_map,
+            "map_downsample":  map_downsample,
         }
 
         install_hook()
@@ -89,11 +109,19 @@ class LTXAttentionCaptureSetup:
         unwrap_diffusion_model(dm)
         wrap_diffusion_model(dm, inst.cfg)
 
+        full_summary = ""
+        if store_mode == "hybrid":
+            if full_target_map is not None:
+                full_summary = " (full targets: " + ", ".join(
+                    f"b{b}h{sorted(hs)}" for b, hs in sorted(full_target_map.items())
+                ) + ")"
+            else:
+                full_summary = f" (full: {sorted(full_block_set)})"
+
         print(
             f"[LTXProfiler] CaptureSetup\n"
             f"  SA={capture_sa} CA={capture_ca} store_mode={store_mode}\n"
-            f"  Blocks : {sorted(parsed_blocks)}"
-            f"{' (full: '+str(sorted(full_block_set))+')' if store_mode=='hybrid' else ''}\n"
+            f"  Blocks : {sorted(parsed_blocks)}{full_summary}\n"
             f"  Heads : {'all' if parsed_heads is None else sorted(parsed_heads)}\n"
             f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}\n"
             f"  Store : {handle}"

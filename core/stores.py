@@ -457,14 +457,33 @@ def _attn_record(inst: _AttnInst, attn_type: str, block_idx: int, timestep: floa
     query_map = _reshape_spatial(W.mean(dim=2).float().cpu(), num_frames, latent_h, latent_w)
 
     # ── Full map ────────────────────────────────────────────────────────
-    store_mode  = cfg.get("store_mode", "reduced")
-    full_blocks = cfg.get("full_blocks", set())
-    want_full   = (store_mode == "full_fp16" or
-                  (store_mode == "hybrid" and block_idx in full_blocks))
+    # Either a dense [H, Sq, Sk] tensor (full_fp16, or hybrid picking whole
+    # blocks), or — when full_target_map restricts to specific heads — a
+    # sparse {head_idx: [Sq, Sk]} dict, to actually save RAM instead of
+    # storing a full-width tensor with unused heads. Single-head consumers
+    # (Head Freeze, QKV Transfer's use_map) index `map[head_idx]` either
+    # way, so they don't need to care which form it is; multi-head
+    # consumers (Query/Key Map, Zone Analysis) only support the dense form.
+    store_mode      = cfg.get("store_mode", "reduced")
+    full_blocks     = cfg.get("full_blocks", set())
+    full_target_map = cfg.get("full_target_map")
+    ds              = cfg.get("map_downsample", 1)
+
+    want_full_targets = (store_mode == "hybrid" and full_target_map is not None
+                         and block_idx in full_target_map)
+    want_full_block   = (store_mode == "full_fp16" or
+                         (store_mode == "hybrid" and not want_full_targets
+                          and block_idx in full_blocks))
 
     full_map = None
-    if want_full:
-        ds = cfg.get("map_downsample", 1)
+    if want_full_targets:
+        full_map = {}
+        for h in sorted(h for h in full_target_map[block_idx] if h < H_heads):
+            Wh = W[h].unsqueeze(0).unsqueeze(0)  # [1, 1, Sq, Sk]
+            if ds > 1 and Sq > ds and Sk > ds:
+                Wh = F.avg_pool2d(Wh.float(), kernel_size=ds, stride=ds)
+            full_map[h] = Wh.squeeze(0).squeeze(0).half().cpu()
+    elif want_full_block:
         if ds > 1 and Sq > ds and Sk > ds:
             full_map = F.avg_pool2d(
                 W.unsqueeze(0).float(), kernel_size=ds, stride=ds

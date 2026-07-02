@@ -62,15 +62,23 @@ class LTXAttentionHeadFreeze:
                     f"Available: {sorted(src[block_idx].keys())}"
                 )
             entry = src[block_idx][freeze_step_source]
-            if entry.get("map") is None:
+            entry_map = entry.get("map")
+            if entry_map is None:
                 raise ValueError("[Freeze] No map. Re-run with store_mode=full_fp16 (or hybrid).")
+            if isinstance(entry_map, dict) and head_idx not in entry_map:
+                raise ValueError(
+                    f"[Freeze] Block {block_idx} was captured with full_targets "
+                    f"(specific heads only) and head {head_idx} wasn't one of them. "
+                    f"Heads available for this block: {sorted(entry_map.keys())}."
+                )
             block_configs.setdefault(block_idx, []).append({
                 "head_idx":   head_idx,
-                "frozen_map": entry["map"][head_idx].float(),
+                "frozen_map": entry_map[head_idx].float(),
             })
 
         patched       = model.clone()
         dm            = patched.model.diffusion_model
+        unwrap_diffusion_model(dm)      # clean slate — see QKVTransfer for why
         original_fwd  = dm._forward
         step_counters = {}
 
@@ -108,7 +116,9 @@ class LTXAttentionHeadFreeze:
                 frame_rate, transformer_options, keyframe_idxs, **kwargs,
             )
 
-        dm._forward = types.MethodType(patched_forward, dm)
+        dm._forward                   = types.MethodType(patched_forward, dm)
+        dm._profiler_patched          = True
+        dm._profiler_original_forward = original_fwd
         summary = ", ".join(f"b{b}h{h}" for b, h in pairs)
         print(
             f"[LTXProfiler] HeadFreeze targets=[{summary}] "
