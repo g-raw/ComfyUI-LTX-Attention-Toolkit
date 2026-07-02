@@ -7,23 +7,28 @@ from ..utils.helpers import reset_call_count
 def _make_block_hook(block_idx: int, timestep_ref: list,
                      num_frames_ref: list, ppf_ref: list,
                      h_lat_ref: list, w_lat_ref: list,
-                     cfg: dict, existing_hook=None):
+                     cfg: dict, is_profiler_block: bool, is_qkv_block: bool,
+                     existing_hook=None):
     """
     Hook injected via patches_replace["dit"].
-    Injects profiling metadata into transformer_options
-    then delegates to the original block.
+    Injects profiling and/or QKV-capture metadata into transformer_options
+    then delegates to the original block. is_profiler_block/is_qkv_block
+    gate which metadata gets injected -- a block can be QKV-only (no
+    attention-metrics hook needed, avoids a wasted attn-map computation
+    in core/hooks.py) or profiler-only, independently.
     """
     def block_hook(args: dict, orig: dict):
         to = dict(args.get("transformer_options", {}))
-        to["_profiler_block_idx"]         = block_idx
-        to["_profiler_timestep"]          = timestep_ref[0]
-        to["_profiler_num_frames"]        = num_frames_ref[0]
-        to["_profiler_patches_per_frame"] = ppf_ref[0]
-        to["_profiler_latent_h"]          = h_lat_ref[0]
-        to["_profiler_latent_w"]          = w_lat_ref[0]
-        to["_profiler_capture_sa"]        = cfg.get("capture_sa", True)
-        to["_profiler_capture_ca"]        = cfg.get("capture_ca", True)
-        if cfg.get("capture_qkv"):
+        if is_profiler_block:
+            to["_profiler_block_idx"]         = block_idx
+            to["_profiler_timestep"]          = timestep_ref[0]
+            to["_profiler_num_frames"]        = num_frames_ref[0]
+            to["_profiler_patches_per_frame"] = ppf_ref[0]
+            to["_profiler_latent_h"]          = h_lat_ref[0]
+            to["_profiler_latent_w"]          = w_lat_ref[0]
+            to["_profiler_capture_sa"]        = cfg.get("capture_sa", True)
+            to["_profiler_capture_ca"]        = cfg.get("capture_ca", True)
+        if is_qkv_block:
             to["_qkv_block_idx"]      = block_idx
             to["_qkv_capture_active"] = True
             to["_qkv_capture_sa"]     = cfg.get("capture_sa", True)
@@ -71,14 +76,20 @@ def wrap_diffusion_model(diffusion_model, cfg: dict):
         patches_replace = dict(transformer_options.get("patches_replace", {}))
         dit_replace     = dict(patches_replace.get("dit", {}))
 
-        for blk_idx in cfg.get("target_blocks", set()):
+        attn_blocks = cfg.get("target_blocks", set())
+        qkv_blocks  = set((cfg.get("target_block_map") or {}).keys())
+
+        for blk_idx in (attn_blocks | qkv_blocks):
             existing = dit_replace.get(("double_block", blk_idx))
             if getattr(existing, "_is_profiler_hook", False):
                 existing = getattr(existing, "_wrapped_original", None)
 
             hook = _make_block_hook(
                 blk_idx, timestep_ref, num_frames_ref, ppf_ref,
-                h_lat_ref, w_lat_ref, cfg, existing_hook=existing,
+                h_lat_ref, w_lat_ref, cfg,
+                is_profiler_block=(blk_idx in attn_blocks),
+                is_qkv_block=(blk_idx in qkv_blocks),
+                existing_hook=existing,
             )
             hook._is_profiler_hook   = True
             hook._wrapped_original   = existing

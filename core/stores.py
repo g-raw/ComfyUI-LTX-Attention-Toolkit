@@ -521,16 +521,19 @@ def _attn_record(inst: _AttnInst, attn_type: str, block_idx: int, timestep: floa
 
 def _qkv_record(inst: _QKVInst, attn_type: str, block_idx: int, timestep: float,
                 q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, heads: int):
-    """Record one QKV capture step into a _QKVInst. Identical logic to the old QKVStore.record()."""
+    """Record one QKV capture step into a _QKVInst."""
     cfg = inst.cfg
     if not cfg:
         return
 
-    target_blocks = cfg.get("target_blocks", set())
-    if block_idx not in target_blocks:
+    # target_block_map: {block_idx: {head_idx, ...}} — per-block head
+    # selection (mirrors _attn_record's full_target_map), set by
+    # LTXAttentionCaptureSetup's qkv_targets field.
+    target_block_map = cfg.get("target_block_map") or {}
+    if block_idx not in target_block_map:
         return
+    target_heads = target_block_map[block_idx]
 
-    target_heads  = cfg.get("target_heads")
     step_key      = f"qkv_{attn_type}_{block_idx}"
     n             = inst._step_counter.get(step_key, 0)
     step_idx      = n + 1
@@ -562,7 +565,7 @@ def _qkv_record(inst: _QKVInst, attn_type: str, block_idx: int, timestep: float,
         store_dict[block_idx][step_idx] = {}
 
     for h in range(heads):
-        if target_heads is not None and h not in target_heads:
+        if h not in target_heads:
             continue
         store_dict[block_idx][step_idx][h] = {
             "q":        q_h[h].half().cpu(),

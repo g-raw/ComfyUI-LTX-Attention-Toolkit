@@ -17,19 +17,6 @@ class LTXAttentionCaptureSetup:
             "target_blocks":   ("STRING",  {"default": "0,8,16,24,32,40,47"}),
             "target_heads":    ("STRING",  {"default": "all"}),
             "capture_steps":   ("STRING",  {"default": "all"}),
-            "capture_qkv":     ("BOOLEAN", {"default": False,
-                               "tooltip": "Also capture raw Q/K/V per head into a QKV store, "
-                                          "for QKV Transfer. Not redundant with store_mode's "
-                                          "full attention map: the map only replays the exact "
-                                          "historical pattern, raw Q/K/V lets QKV Transfer "
-                                          "recombine components from two different generations "
-                                          "into a new pattern."}),
-            "qkv_target_heads": ("STRING", {"default": "8,12,16",
-                               "tooltip": "Heads to capture raw Q/K/V for (separate from "
-                                          "target_heads above -- raw Q/K/V per head is much "
-                                          "more expensive than the metrics/key/query maps, so "
-                                          "this stays a narrow list by default even though "
-                                          "target_heads defaults to 'all')."}),
             "store_mode":      (["reduced", "full_fp16", "hybrid"],
                                {"default": "reduced",
                                 "tooltip": "reduced: metrics + key/query maps only\n"
@@ -51,15 +38,36 @@ class LTXAttentionCaptureSetup:
                                           "when you already know which heads you'll feed into Head "
                                           "Freeze. Paste Head Candidates' candidates_csv directly "
                                           "(one 'block,head' per line), or type manually as "
-                                          "'block:head | block:head | ...'. Heads not listed for a "
-                                          "block covered here won't have a full map available, so "
+                                          "'block:head | block:head | ...' (also accepts "
+                                          "'block:h1,h2,...' and 'block:all'). Heads not listed for "
+                                          "a block covered here won't have a full map available, so "
                                           "Query Map/Key Map/Zone Analysis on them will error or "
                                           "skip -- use Head Freeze/QKV Transfer for those, or add "
                                           "that block to full_blocks instead (not here) for full "
                                           "multi-head coverage."}),
             "map_downsample":  ("INT",     {"default": 1, "min": 1, "max": 64}),
-            "reset_store":     ("BOOLEAN", {"default": True}),
+
+            # ── QKV capture (separate from the attention-map settings above) ──
+            "capture_qkv":     ("BOOLEAN", {"default": False,
+                               "tooltip": "Also capture raw Q/K/V per head into a separate QKV "
+                                          "store, for QKV Transfer. Not redundant with store_mode's "
+                                          "full attention map: the map only replays the exact "
+                                          "historical pattern, raw Q/K/V lets QKV Transfer "
+                                          "recombine components from two different generations "
+                                          "into a new pattern."}),
+            "qkv_targets":     ("STRING",  {"default": "", "multiline": True,
+                               "tooltip": "Only used when capture_qkv is on. Same format as "
+                                          "full_targets/Head Freeze's targets: paste Head "
+                                          "Candidates' candidates_csv directly (one 'block,head' "
+                                          "per line), or type manually as 'block:head | "
+                                          "block:h1,h2,... | block:all | ...'. A whole-string "
+                                          "'all' (or 'all:all') captures every block and head. "
+                                          "Independent from target_blocks/target_heads above -- "
+                                          "raw Q/K/V is much more expensive than the metrics/key/"
+                                          "query maps, so this needs its own explicit list."}),
+
             "store_name":      ("STRING",  {"default": ""}),
+            "reset_store":     ("BOOLEAN", {"default": True}),
         }}
 
     RETURN_TYPES = ("MODEL", "STORE_HANDLE", "QKV_STORE_HANDLE")
@@ -68,9 +76,8 @@ class LTXAttentionCaptureSetup:
     CATEGORY     = "g_raw/LTX/Profiler"
 
     def setup(self, model, capture_sa, capture_ca, target_blocks, target_heads,
-              capture_steps, capture_qkv, qkv_target_heads,
-              store_mode, full_blocks, full_targets, map_downsample,
-              reset_store, store_name):
+              capture_steps, store_mode, full_blocks, full_targets, map_downsample,
+              capture_qkv, qkv_targets, store_name, reset_store):
 
         # Validate reset_store is a boolean
         if not isinstance(reset_store, (bool, int)):
@@ -107,6 +114,18 @@ class LTXAttentionCaptureSetup:
                 heads = range(32) if hd == "all" else (hd,)
                 full_target_map.setdefault(blk, set()).update(heads)
 
+        qkv_target_map = None
+        if capture_qkv:
+            if not qkv_targets.strip():
+                raise ValueError("[CaptureSetup] capture_qkv is on but qkv_targets is blank.")
+            if qkv_targets.strip().lower() in ("all", "all:all"):
+                qkv_target_map = {b: set(range(32)) for b in range(48)}
+            else:
+                qkv_target_map = {}
+                for blk, hd in parse_block_head_pairs(qkv_targets):
+                    heads = set(range(32)) if hd == "all" else {hd}
+                    qkv_target_map.setdefault(blk, set()).update(heads)
+
         # Create/use named store(s) via StoreRegistry (atomic to avoid race)
         reg  = get_registry()
         inst = reg.create_and_get_attn(store_name if store_name else None)
@@ -116,30 +135,32 @@ class LTXAttentionCaptureSetup:
         handle = inst.name
 
         inst.cfg = {
-            "capture_sa":      capture_sa,
-            "capture_ca":      capture_ca,
-            "target_blocks":   parsed_blocks,
-            "target_heads":    parsed_heads,
-            "capture_steps":   parsed_steps,
-            "capture_qkv":     capture_qkv,
-            "store_mode":      store_mode,
-            "full_blocks":     full_block_set,
-            "full_target_map": full_target_map,
-            "map_downsample":  map_downsample,
+            "capture_sa":       capture_sa,
+            "capture_ca":       capture_ca,
+            "target_blocks":    parsed_blocks,
+            "target_heads":     parsed_heads,
+            "capture_steps":    parsed_steps,
+            "store_mode":       store_mode,
+            "full_blocks":      full_block_set,
+            "full_target_map":  full_target_map,
+            "map_downsample":   map_downsample,
+            # Cross-store bookkeeping consumed only by wrap_diffusion_model's
+            # block-hook-installation loop (core/model_patch.py), not by
+            # _attn_record -- QKV capture's own filtering reads the same
+            # map from qkv_inst.cfg below.
+            "target_block_map": qkv_target_map,
         }
 
         qkv_handle = ""
         if capture_qkv:
-            parsed_qkv_heads = parse_int_set(qkv_target_heads)
             qkv_inst = reg.create_and_get_qkv(store_name if store_name else None)
             if reset_store:
                 qkv_inst.reset_data()
             qkv_inst.cfg = {
-                "target_blocks": parsed_blocks,
-                "target_heads":  parsed_qkv_heads,
-                "capture_steps": parsed_steps,
-                "capture_sa":    capture_sa,
-                "capture_ca":    capture_ca,
+                "target_block_map": qkv_target_map,
+                "capture_steps":    parsed_steps,
+                "capture_sa":       capture_sa,
+                "capture_ca":       capture_ca,
             }
             qkv_handle = qkv_inst.name
 
@@ -158,6 +179,13 @@ class LTXAttentionCaptureSetup:
             else:
                 full_summary = f" (full: {sorted(full_block_set)})"
 
+        qkv_line = "(off)"
+        if capture_qkv:
+            targets_str = ", ".join(
+                f"b{b}h{sorted(hs)}" for b, hs in sorted(qkv_target_map.items())
+            )
+            qkv_line = f"{qkv_handle} ({targets_str})"
+
         print(
             f"[LTXProfiler] CaptureSetup\n"
             f"  SA={capture_sa} CA={capture_ca} store_mode={store_mode}\n"
@@ -165,7 +193,6 @@ class LTXAttentionCaptureSetup:
             f"  Heads : {'all' if parsed_heads is None else sorted(parsed_heads)}\n"
             f"  Steps : {'all' if parsed_steps is None else sorted(parsed_steps)}\n"
             f"  Store : {handle}\n"
-            f"  QKV   : {qkv_handle or '(off)'}"
-            f"{' heads='+str(sorted(parsed_qkv_heads)) if capture_qkv and parsed_qkv_heads else ''}"
+            f"  QKV   : {qkv_line}"
         )
         return (patched, handle, qkv_handle)

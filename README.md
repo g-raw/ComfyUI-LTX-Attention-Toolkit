@@ -81,15 +81,16 @@ Q/K/V — one capture path, one node, real metrics in every mode.
 | `model` | MODEL | LTX model to patch |
 | `capture_sa` | BOOL | Capture self-attention (applies to both the metrics and the QKV capture below) |
 | `capture_ca` | BOOL | Capture cross-attention (video→text), same scope |
-| `target_blocks` | STRING | `"all"` or `"0,8,16,24,32,40,47"` — shared by metrics and QKV capture |
+| `target_blocks` | STRING | `"all"` or `"0,8,16,24,32,40,47"` — drives the metrics/key/query/full maps only |
 | `target_heads` | STRING | `"all"` or `"8,12,16"` — RAM filter for the metrics/key/query maps |
 | `capture_steps` | STRING | `"all"` or `"0,1,2,3"` — shared by metrics and QKV capture |
 | `store_mode` | ENUM | `reduced` / `full_fp16` / `hybrid` |
 | `full_blocks` | STRING | Blocks stored at full res (every head) when `hybrid`. A block also listed in `full_targets` uses that block's per-head selection instead; `full_blocks` still applies normally to any block `full_targets` doesn't cover — the two combine |
-| `full_targets` | STRING | Optional, `hybrid` only — for the blocks listed here, restrict full-map storage to specific `(block, head)` pairs instead of every head. Same format as `Head Freeze`'s `targets`: paste `Head Candidates`' `candidates_csv`, or type `block:head \| block:head \| ...` |
+| `full_targets` | STRING | Optional, `hybrid` only — for the blocks listed here, restrict full-map storage to specific `(block, head)` pairs instead of every head. Same format as `qkv_targets`/`Head Freeze`'s `targets` below |
 | `map_downsample` | INT | Spatial downsample factor for full maps |
+| *(QKV capture — separate from the attention-map settings above)* | | |
 | `capture_qkv` | BOOL | Also capture raw Q/K/V per head into a separate QKV store, for `QKV Transfer` |
-| `qkv_target_heads` | STRING | Heads to capture raw Q/K/V for — kept separate from `target_heads` above, since raw Q/K/V per head is far more expensive than the metrics/key/query maps. Default `"8,12,16"` |
+| `qkv_targets` | STRING | Only used when `capture_qkv` is on. **Independent of `target_blocks`/`target_heads` above** — its own `(block, head)` list, since raw Q/K/V is far more expensive than the metrics/key/query maps. Same format as `full_targets`/`Head Freeze`'s `targets`: paste `Head Candidates`' `candidates_csv`, or type `block:head \| block:h1,h2,... \| block:all \| ...`. A whole-string `"all"` (or `"all:all"`) captures every block and head |
 | `store_name` | STRING | Empty = new auto-named handle every run. Given a name, re-running reuses that same handle (get-or-create) instead of spawning `name_2`, `name_3`, … Applies to both the attn and the QKV store — they can't collide, they live in separate registries |
 | `reset_store` | BOOL | With a named `store_name`: clear that handle (both stores) before capturing. With it blank, the handle is always fresh already, so this has no effect |
 
@@ -452,8 +453,7 @@ the candidate shortlist.
 
 ```
 # Step 1: capture source
-[Load LTX] → [Setup Capture, capture_qkv=True, target_blocks="24,32",
-              qkv_target_heads="8,12,16"]
+[Load LTX] → [Setup Capture, capture_qkv=True, qkv_targets="24:8,12,16 | 32:8,12,16"]
            → [KSampler, prompt="chrome robot on rails"]
            → [Store Dump, qkv_handle=<from Setup Capture> → "source.pt"]
 
