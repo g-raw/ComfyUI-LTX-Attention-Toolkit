@@ -19,9 +19,11 @@ class LTXAttentionHeadFreeze:
                                               "the same run. Paste Head Candidates' "
                                               "candidates_csv directly (one 'block,head' per "
                                               "line), or type manually as "
-                                              "'block:head | block:head | ...'. Use 'block:all' "
-                                              "to freeze every captured head of that block in "
-                                              "one entry. Leave blank to disable the freeze "
+                                              "'block:head | block:head | ...' (or "
+                                              "'block:h1,h2,h3' for several heads of one block "
+                                              "in a single entry). Use 'block:all' to freeze "
+                                              "every captured head of that block. Leave blank "
+                                              "to disable the freeze "
                                               "entirely -- this is the reliable way to turn it "
                                               "off; ComfyUI's node bypass/mute skips this node's "
                                               "cleanup, so the diffusion_model (shared across "
@@ -165,10 +167,14 @@ class LTXQKVTransfer:
         return {"required": {
             "model":              ("MODEL",),
             "attn_type":          (["sa", "ca"], {"default": "sa"}),
-            "target_blocks":      ("STRING", {"default": "24",
-                                   "tooltip": "Simple: '24,32' ou 'all'\n"
-                                              "Extended: '24:8,12 | 32:all'"}),
-            "head_indices":       ("STRING", {"default": "8,12,16"}),
+            "targets":            ("STRING", {"default": "24:8,12,16", "multiline": True,
+                                   "tooltip": "Same format as Head Freeze's targets: "
+                                              "'block,head' one per line (paste Head "
+                                              "Candidates' candidates_csv directly), or "
+                                              "'block:head1,head2,... | block:all | ...'. "
+                                              "'all' alone (nothing else) means every "
+                                              "block/head captured in the QKV store. Blank "
+                                              "disables (see below)."}),
             "source_step":        ("INT",    {"default": 0, "min": 0, "max": 255}),
             "transfer_from_step": ("INT",    {"default": 0, "min": 0, "max": 999}),
             "transfer_to_step":   ("INT",    {"default": 999, "min": 0, "max": 999}),
@@ -190,35 +196,25 @@ class LTXQKVTransfer:
     CATEGORY     = "g_raw/LTX/Profiler"
 
     @staticmethod
-    def _parse_block_head_mapping(target_blocks, head_indices,
-                                   qkv_store, attn_type, source_step):
-        store_src = qkv_store.data.get(attn_type, {})
+    def _resolve_targets(targets, store_src, source_step):
+        """targets -> {block_idx: [head_idx, ...]}, resolving 'all' (either
+        a whole-string 'all' meaning every block/head captured, or a
+        per-block 'block:all') against what's actually in store_src for
+        source_step."""
+        if targets.strip().lower() == "all":
+            return {
+                blk: sorted(store_src[blk].get(source_step, {}).keys())
+                for blk in sorted(store_src.keys())
+            }
 
-        def resolve_heads(blk, heads_str):
-            if heads_str.strip().lower() == "all":
-                return sorted(store_src.get(blk, {}).get(source_step, {}).keys())
-            return [int(x.strip()) for x in heads_str.split(",") if x.strip()]
-
-        if ":" in target_blocks:
-            mapping = {}
-            for seg in target_blocks.split("|"):
-                seg = seg.strip()
-                if not seg:
-                    continue
-                if ":" in seg:
-                    blk_str, h_str = seg.split(":", 1)
-                    blk = int(blk_str.strip())
-                    mapping[blk] = resolve_heads(blk, h_str)
-                else:
-                    blk = int(seg)
-                    mapping[blk] = resolve_heads(blk, head_indices)
-            return mapping
-
-        if target_blocks.strip().lower() == "all":
-            block_list = sorted(store_src.keys())
-        else:
-            block_list = [int(x.strip()) for x in target_blocks.split(",") if x.strip()]
-        return {blk: resolve_heads(blk, head_indices) for blk in block_list}
+        block_head_map: dict[int, list] = {}
+        for blk, head_sel in parse_block_head_pairs(targets):
+            if head_sel == "all":
+                heads = sorted(store_src.get(blk, {}).get(source_step, {}).keys())
+            else:
+                heads = [head_sel]
+            block_head_map.setdefault(blk, []).extend(heads)
+        return block_head_map
 
     @staticmethod
     def _disable(model, reason: str):
@@ -234,7 +230,7 @@ class LTXQKVTransfer:
         unwrap_diffusion_model(patched.model.diffusion_model)
         return (patched,)
 
-    def apply_transfer(self, model, attn_type, target_blocks, head_indices,
+    def apply_transfer(self, model, attn_type, targets,
                        source_step, transfer_from_step, transfer_to_step,
                        blend, use_map, use_q, use_k, use_v,
                        sim_filter, sim_threshold, qkv_handle):
@@ -243,6 +239,8 @@ class LTXQKVTransfer:
             use_q = use_k = use_v = False
         if not any([use_map, use_q, use_k, use_v]):
             return self._disable(model, "no component selected")
+        if not targets.strip():
+            return self._disable(model, "targets is blank")
 
         reg = get_registry()
         if qkv_handle and qkv_handle.strip():
@@ -254,16 +252,12 @@ class LTXQKVTransfer:
         if not any(qkv_store.data[t] for t in qkv_store.data):
             raise ValueError("[Transfer] QKVStore is empty.")
 
-        block_head_map = self._parse_block_head_mapping(
-            target_blocks, head_indices, qkv_store, attn_type, source_step
-        )
+        store_src = qkv_store.data.get(attn_type, {})
+        block_head_map = self._resolve_targets(targets, store_src, source_step)
         if not block_head_map:
-            if not target_blocks.strip():
-                return self._disable(model, "target_blocks is blank")
-            raise ValueError(f"[Transfer] No blocks resolved from '{target_blocks}'.")
+            raise ValueError(f"[Transfer] No blocks/heads resolved from '{targets}'.")
 
         # Validation
-        store_src = qkv_store.data.get(attn_type, {})
         for blk_idx, heads in block_head_map.items():
             if blk_idx not in store_src:
                 raise ValueError(f"[Transfer] Block {blk_idx} not found.")

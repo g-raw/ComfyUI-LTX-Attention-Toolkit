@@ -76,29 +76,37 @@ def parse_int_set(s: str, all_range: Optional[range] = None) -> Optional[set]:
 
 
 def parse_block_head_pairs(s: str) -> list:
-    """Parse a list of (block, head) pairs from either the Head Candidates
-    CSV output ('block,head' one per line) or a compact manual entry
-    ('block:head | block:head | ...'), or any mix of the two.
-
-    The head side may also be 'all' ('block,all' / 'block:all'), meaning
-    every head of that block — returned as the string "all" rather than
-    an int, since only the caller knows what "every head" resolves to
-    (heads actually captured for that block, vs. every possible head)."""
+    """Parse a list of (block, head) pairs. Entries are separated by
+    newlines and/or '|'; each entry is one of:
+      - 'block,head'          — Head Candidates' candidates_csv row
+      - 'block:head'          — compact manual single pair
+      - 'block:h1,h2,h3'      — one block, several heads at once
+      - 'block:all' / 'block,all' — every head of that block, returned
+        as the string "all" rather than an int, since only the caller
+        knows what "every head" resolves to (heads actually captured
+        for that block, vs. every possible head)."""
     pairs = []
     for tok in re.split(r"[\n|]+", s):
         tok = tok.strip()
         if not tok:
             continue
-        parts = re.split(r"[,:]", tok)
-        if len(parts) != 2:
-            raise ValueError(
-                f"Bad target '{tok}', expected 'block,head', 'block:head', "
-                f"or 'block:all'."
-            )
-        blk   = int(parts[0].strip())
-        hd_s  = parts[1].strip()
-        head  = "all" if hd_s.lower() == "all" else int(hd_s)
-        pairs.append((blk, head))
+        if ":" in tok:
+            blk_s, heads_s = tok.split(":", 1)
+            blk = int(blk_s.strip())
+            for h_s in heads_s.split(","):
+                h_s = h_s.strip()
+                if not h_s:
+                    continue
+                pairs.append((blk, "all" if h_s.lower() == "all" else int(h_s)))
+        else:
+            parts = tok.split(",")
+            if len(parts) != 2:
+                raise ValueError(
+                    f"Bad target '{tok}', expected 'block,head', "
+                    f"'block:head[,head,...]', or 'block:all'."
+                )
+            blk_s, hd_s = parts[0].strip(), parts[1].strip()
+            pairs.append((int(blk_s), "all" if hd_s.lower() == "all" else int(hd_s)))
     return pairs
 
 

@@ -273,15 +273,25 @@ the model maintains long-range temporal coherence.
 #### `LTX QKV — Transfer`
 Injects Q/K/V from a source generation into a target generation.
 
-Supports multi-block, multi-head targeting:
+`targets` uses the same format as `Head Freeze`'s `targets` (both parsed
+by `parse_block_head_pairs`), plus a whole-string `all`:
 ```
-# Simple syntax (same heads for all blocks)
-target_blocks = "24,32,40"
-head_indices  = "8,12,16"
+# Head Candidates CSV (one 'block,head' pair per line)
+24,8
+24,12
+32,16
 
-# Extended syntax (per-block head lists)
-target_blocks = "24:8,12 | 32:all | 40:0,4,8"
+# Manual — one block, several heads
+targets = "24:8,12,16"
+
+# Manual — several blocks, mixed
+targets = "24:8,12 | 32:all | 40:0,4,8"
+
+# Every block/head captured in the QKV store
+targets = "all"
 ```
+`block:all` (or a whole-string `all`) resolves against whatever heads
+were actually captured for that block/`source_step` in the QKV store.
 
 Transfer modes (combinable):
 
@@ -298,13 +308,13 @@ Transfer modes (combinable):
 `qkv_handle` (STRING, optional): target a specific named QKV store.
 Blank = whichever QKV store is currently active.
 
-**To disable, don't select any transfer flag (or blank `target_blocks`)
-— don't use ComfyUI's node bypass/mute.** Same reasoning as `Head
+**To disable, don't select any transfer flag (or blank `targets`) —
+don't use ComfyUI's node bypass/mute.** Same reasoning as `Head
 Freeze`: this node patches the shared `diffusion_model` directly, and
 bypass/mute skips this node's cleanup entirely, so a stale patch from
 an earlier run stays in effect. Turning off every `use_*` flag, or
-blanking `target_blocks`, still runs the node's code and reliably
-unwraps instead.
+blanking `targets`, still runs the node's code and reliably unwraps
+instead.
 
 ---
 
