@@ -59,6 +59,7 @@ Attention map `W: [H, Sq, Sk] fp16`. Key map = `W.mean(dim=1)` (what's looked at
 ### IO & Debug
 - **Store Dump/Load** (`nodes/io.py`): Save/load AttentionStore and QKVStore to `.pt` files. All four nodes take an optional `store_handle`/`qkv_handle` to target a specific named store instead of implicitly acting on whatever is "current" in the registry.
 - **LTX Attn — Compare Runs** (`nodes/utils.py`): Diff heatmap between two capture runs.
+- **LTX Attn — Head Candidates** (`nodes/utils.py:LTXAttentionHeadCandidates`): Combines several metrics' zscore diff (reuses `LTXAttentionCompareRuns`'s store-loading/extraction/zscore logic) into one composite `mean(|zscore|)` score per (block, head), outputs a ranked candidate shortlist + a control group (lowest-score or random) as plain-text reports and `block,head` CSV lists — for picking heads to feed into Head Freeze.
 - **Store Inspect nodes** (`nodes/inspect.py`): Print store contents for debugging (AttentionStore summary includes key/query map presence).
 - **LTX — Latent Dims** (`nodes/utils.py:LTXLatentDims`): Extract T/H/W from a LATENT tensor.
 

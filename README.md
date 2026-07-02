@@ -284,6 +284,7 @@ Blank = whichever QKV store is currently active.
 | `LTX QKV — Dump` | Save QKVStore to `.pt` |
 | `LTX QKV — Load` | Load `.pt` into QKVStore |
 | `LTX Attn — Compare Runs` | Diff heatmap + ranked (block, head) table for one metric between two runs |
+| `LTX Attn — Head Candidates` | Combine several metrics' zscore diff into one composite score, shortlist candidate + control (block, head) groups |
 | `LTX Attn — Store Inspect` | Print AttentionStore contents (incl. key/query map presence) |
 | `LTX QKV — Store Inspect` | Print QKVStore contents |
 | `LTX — Latent Dims` | Extract T/H/W from a LATENT |
@@ -343,6 +344,36 @@ IMAGE plus a `stats_text` STRING with summary stats and the full
 top-`top_k` ranked table — run it once per metric, then compare which
 `(block, head)` pairs recur across metrics to spot structurally divergent
 heads vs. metric-specific noise.
+
+#### `LTX Attn — Head Candidates` details
+
+Automates that last step: instead of running Compare Runs once per
+metric and manually cross-referencing which `(block, head)` pairs recur,
+this combines several metrics' zscore diffs into one **composite score**
+per head — `mean(|zscore(A - B)|)` across the metrics you list — and
+outputs a ranked shortlist plus a control group, as plain text (not a
+heatmap) so you can copy `block,head` pairs straight into `Head Freeze`.
+
+| Input | Type | Description |
+|---|---|---|
+| `store_handle_a` / `store_handle_b` | STRING | The two stores to compare |
+| `attn_type` | ENUM | `sa` / `ca` |
+| `metrics` | STRING | Comma-separated metric names, e.g. `temporal,frame_dist_mean_norm,frame_dist_std_norm` |
+| `step_idx` | INT | `-1` averages across all captured steps |
+| `top_k` | INT | Candidate shortlist size |
+| `control_mode` | ENUM | `lowest_score` (heads least implicated by these metrics) / `random` |
+| `control_k` | INT | Control group size (`0` to skip it) |
+| `seed` | INT | Only used when `control_mode = random` |
+
+Use `_norm` distance metrics here rather than the raw ones if the two
+runs don't share the same `num_frames`/resolution — same rationale as
+Compare Runs. The `report` STRING lists both groups ranked by composite
+score, each entry showing every individual metric's zscore (not just the
+composite) so you can tell whether a head is consistently implicated
+across all of them or only carried by one. `candidates_csv` and
+`control_csv` are just `block,head` pairs, one per line, for pasting
+into other nodes/scripts. The control group excludes anything already in
+the candidate shortlist.
 
 ---
 

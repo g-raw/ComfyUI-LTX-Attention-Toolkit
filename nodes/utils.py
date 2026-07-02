@@ -198,3 +198,136 @@ class LTXAttentionCompareRuns:
             f"Top {min(top_k, score.size)} by |{diff_mode}|:\n" + "\n".join(rank_lines)
         )
         return (out, stats)
+
+
+class LTXAttentionHeadCandidates:
+    """Combine the zscore diff of several metrics into one composite score
+    per (block, head), to shortlist heads for a targeted intervention (e.g.
+    Head Freeze) instead of eyeballing several separate heatmaps. Reuses
+    LTXAttentionCompareRuns's store-loading/extraction/zscore logic."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "store_handle_a": ("STRING", {"default": "",
+                               "placeholder": "store A handle"}),
+            "store_handle_b": ("STRING", {"default": "",
+                               "placeholder": "store B handle"}),
+            "attn_type": (["sa", "ca"], {"default": "sa"}),
+            "metrics":   ("STRING", {"default": "temporal,frame_dist_mean_norm,frame_dist_std_norm",
+                          "tooltip": "Comma-separated metric names. Composite score = "
+                                     "mean(|zscore|) across all of them, per (block, head)."}),
+            "step_idx":  ("INT", {"default": -1, "min": -1, "max": 255}),
+            "top_k":     ("INT", {"default": 12, "min": 1, "max": 1536,
+                          "tooltip": "How many (block, head) candidates to shortlist, "
+                                     "ranked by the composite score."}),
+            "control_mode": (["lowest_score", "random"], {"default": "lowest_score",
+                             "tooltip": "How to pick the control group: the heads least "
+                                        "implicated by these metrics, or a random sample "
+                                        "(excluding the candidates either way)."}),
+            "control_k": ("INT", {"default": 12, "min": 0, "max": 1536,
+                          "tooltip": "Control group size. 0 to skip it."}),
+            "seed":      ("INT", {"default": 0, "min": 0, "max": 2**31 - 1,
+                          "tooltip": "Only used when control_mode=random."}),
+        }}
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("report", "candidates_csv", "control_csv")
+    FUNCTION     = "rank"
+    CATEGORY     = "g_raw/LTX/Profiler"
+
+    @staticmethod
+    def _zscore(run_a, run_b, attn_type, metric, step_idx):
+        """Returns (zscore[n_heads, n_blocks], common_blocks)."""
+        mat_a, blocks_a = LTXAttentionCompareRuns._extract(run_a, attn_type, metric, step_idx)
+        mat_b, blocks_b = LTXAttentionCompareRuns._extract(run_b, attn_type, metric, step_idx)
+        common = sorted(set(blocks_a) & set(blocks_b))
+        if not common:
+            raise ValueError(f"[HeadCandidates] No common blocks for metric '{metric}'.")
+        mat_a = mat_a[:, [blocks_a.index(b) for b in common]]
+        mat_b = mat_b[:, [blocks_b.index(b) for b in common]]
+        mh = min(mat_a.shape[0], mat_b.shape[0])
+        mat_a, mat_b = mat_a[:mh], mat_b[:mh]
+        std = float(np.concatenate([mat_a.ravel(), mat_b.ravel()]).std()) + 1e-8
+        z = (mat_a - mat_b) / std
+        return z, common
+
+    @staticmethod
+    def _format_group(title, indices, composite, z_stack, metric_list, common_blocks):
+        lines = [title]
+        for rank, (h, col) in enumerate(indices, start=1):
+            blk    = common_blocks[col]
+            detail = ", ".join(f"{m}={z_stack[mi, h, col]:+.3f}"
+                               for mi, m in enumerate(metric_list))
+            lines.append(
+                f"#{rank:2d}  block={blk:2d} head={h:2d}  "
+                f"composite={composite[h, col]:.3f}  ({detail})"
+            )
+        return "\n".join(lines)
+
+    def rank(self, store_handle_a, store_handle_b, attn_type, metrics, step_idx,
+             top_k, control_mode, control_k, seed):
+        reg   = get_registry()
+        run_a = LTXAttentionCompareRuns._load_run(store_handle_a, reg)
+        run_b = LTXAttentionCompareRuns._load_run(store_handle_b, reg)
+
+        metric_list = list(dict.fromkeys(m.strip() for m in metrics.split(",") if m.strip()))
+        if not metric_list:
+            raise ValueError("[HeadCandidates] No metrics given.")
+
+        per_metric = {m: self._zscore(run_a, run_b, attn_type, m, step_idx) for m in metric_list}
+
+        # Intersect blocks/heads across all metrics — they should normally
+        # agree (same capture config) but this stays correct if they don't.
+        common_blocks = sorted(set.intersection(*(set(b) for _, b in per_metric.values())))
+        if not common_blocks:
+            raise ValueError("[HeadCandidates] No blocks common across all requested metrics.")
+        n_heads = min(z.shape[0] for z, _ in per_metric.values())
+
+        z_stack = np.stack([
+            per_metric[m][0][:n_heads][:, [per_metric[m][1].index(b) for b in common_blocks]]
+            for m in metric_list
+        ], axis=0)  # [n_metrics, n_heads, n_blocks]
+
+        composite = np.abs(z_stack).mean(axis=0)  # [n_heads, n_blocks]
+
+        order = np.argsort(composite.ravel())[::-1]  # descending
+        n_total = composite.size
+        top_k   = min(top_k, n_total)
+        cand_flat = order[:top_k]
+        cand_idx  = [np.unravel_index(fi, composite.shape) for fi in cand_flat]
+
+        remaining   = order[top_k:]
+        control_k   = min(control_k, len(remaining))
+        if control_k > 0:
+            if control_mode == "random":
+                rng = np.random.default_rng(seed)
+                ctrl_flat = rng.choice(remaining, size=control_k, replace=False)
+            else:  # lowest_score
+                ctrl_flat = remaining[-control_k:][::-1]
+            ctrl_idx = [np.unravel_index(fi, composite.shape) for fi in ctrl_flat]
+        else:
+            ctrl_idx = []
+
+        header = (
+            f"A = '{store_handle_a}'  |  B = '{store_handle_b}'  |  attn_type = {attn_type}\n"
+            f"Metrics: {metric_list}\n"
+            f"Composite score = mean(|zscore(A-B)|) across those metrics, per (block, head)\n"
+            f"Blocks: {common_blocks}  |  Heads: 0-{n_heads - 1}\n"
+        )
+        candidates_txt = self._format_group(
+            f"=== Candidates: top {top_k} by composite score ===",
+            cand_idx, composite, z_stack, metric_list, common_blocks,
+        )
+        control_txt = self._format_group(
+            f"=== Control group: {control_k} ({control_mode}) ===",
+            ctrl_idx, composite, z_stack, metric_list, common_blocks,
+        ) if ctrl_idx else "=== Control group: (skipped, control_k=0) ==="
+
+        report = f"{header}\n{candidates_txt}\n\n{control_txt}\n"
+
+        candidates_csv = "\n".join(f"{common_blocks[col]},{h}" for h, col in cand_idx)
+        control_csv    = "\n".join(f"{common_blocks[col]},{h}" for h, col in ctrl_idx)
+
+        print(f"[HeadCandidates]\n{report}")
+        return (report, candidates_csv, control_csv)

@@ -6,7 +6,8 @@ from .nodes.evolution       import LTXAttentionTimestepEvolution
 from .nodes.io              import (LTXAttentionStoreDump, LTXAttentionStoreLoad,
                                    LTXQKVDump, LTXQKVLoad)
 from .nodes.inspect         import LTXAttentionStoreInspect, LTXQKVStoreInspect
-from .nodes.utils           import LTXLatentDims, LTXAttentionCompareRuns
+from .nodes.utils           import (LTXLatentDims, LTXAttentionCompareRuns,
+                                   LTXAttentionHeadCandidates)
 from .nodes.zone_analysis   import LTXAttentionZoneAnalysis
 from .nodes.rf_inversion    import LTXRFForwardSampler, LTXRFReverseSampler
 
@@ -35,6 +36,7 @@ NODE_CLASS_MAPPINGS = {
     # Utils
     "LTXLatentDims":                 LTXLatentDims,
     "LTXAttentionCompareRuns":       LTXAttentionCompareRuns,
+    "LTXAttentionHeadCandidates":    LTXAttentionHeadCandidates,
     #RF Inversion
     "LTXRFForwardSampler":           LTXRFForwardSampler,
     "LTXRFReverseSampler":           LTXRFReverseSampler,
@@ -59,6 +61,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXQKVStoreInspect":            "LTX QKV — Store Inspect",
     "LTXLatentDims":                 "LTX — Latent Dims",
     "LTXAttentionCompareRuns":       "LTX Attn — Compare Runs",
+    "LTXAttentionHeadCandidates":    "LTX Attn — Head Candidates",
     "LTXRFForwardSampler":           "LTX RF-Inv Forward (x0→xT)",
     "LTXRFReverseSampler":           "LTX RF-Inv Reverse (xT→x0)",
 }
