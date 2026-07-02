@@ -85,8 +85,8 @@ one capture path, one `STORE_HANDLE`, real metrics in every mode.
 | `target_heads` | STRING | `"all"` or `"8,12,16"` — RAM filter |
 | `capture_steps` | STRING | `"all"` or `"0,1,2,3"` |
 | `store_mode` | ENUM | `reduced` / `full_fp16` / `hybrid` |
-| `full_blocks` | STRING | Blocks stored at full res when `hybrid` (every head). Ignored if `full_targets` is set |
-| `full_targets` | STRING | Optional, `hybrid` only — restrict full-map storage to specific `(block, head)` pairs instead of every head of `full_blocks`. Same format as `Head Freeze`'s `targets`: paste `Head Candidates`' `candidates_csv`, or type `block:head \| block:head \| ...` |
+| `full_blocks` | STRING | Blocks stored at full res (every head) when `hybrid`. A block also listed in `full_targets` uses that block's per-head selection instead; `full_blocks` still applies normally to any block `full_targets` doesn't cover — the two combine |
+| `full_targets` | STRING | Optional, `hybrid` only — for the blocks listed here, restrict full-map storage to specific `(block, head)` pairs instead of every head. Same format as `Head Freeze`'s `targets`: paste `Head Candidates`' `candidates_csv`, or type `block:head \| block:head \| ...` |
 | `map_downsample` | INT | Spatial downsample factor for full maps |
 | `store_name` | STRING | Empty = new auto-named handle every run. Given a name, re-running reuses that same handle (get-or-create) instead of spawning `name_2`, `name_3`, … |
 | `reset_store` | BOOL | With a named `store_name`: clear that handle before capturing. With it blank, the handle is always fresh already, so this has no effect |
@@ -97,14 +97,15 @@ metrics (plus `_norm` variants of the last four, see below) and
 `key_map`/`query_map` (geometry auto-detected from the live latent — no
 manual frame/height/width inputs needed). `full_fp16`/`hybrid`
 additionally store the full `[H, Sq, Sk]` map for the relevant blocks —
-unless `full_targets` is set, in which case only the listed heads' maps
-are stored (a sparse `{head_idx: [Sq, Sk]}` dict instead of the full
-`[H, Sq, Sk]` tensor), to avoid paying for every head when you already
-know exactly which ones you'll feed into `Head Freeze`. `Head Freeze`
-and `QKV Transfer` read a single head either way and don't care which
-form it is; `Query Map`/`Key Map`/`Zone Analysis` need every head and
-will raise (or silently skip that block/step) if it's a sparse map —
-use `full_blocks` instead if you need those.
+except for any block listed in `full_targets`, where only the listed
+heads' maps are stored for *that block* (a sparse `{head_idx: [Sq,
+Sk]}` dict instead of the full `[H, Sq, Sk]` tensor), to avoid paying
+for every head when you already know exactly which ones you'll feed
+into `Head Freeze`. `full_blocks` still applies normally to every other
+block. `Head Freeze` and `QKV Transfer` read a single head either way
+and don't care which form it is; `Query Map`/`Key Map`/`Zone Analysis`
+need every head and will raise (or silently skip that block/step) on a
+sparse map — put that block in `full_blocks` instead if you need those.
 
 **Memory estimates (1280×720, 16 frames, 32 heads, 4 steps) :**
 

@@ -25,20 +25,27 @@ class LTXAttentionCaptureSetup:
                                            "full_fp16: + full attention map for every target block\n"
                                            "hybrid: full map only for full_blocks, reduced elsewhere"}),
             "full_blocks":     ("STRING",  {"default": "8,16,24,32,40",
-                               "tooltip": "Blocks stored at full resolution in hybrid mode. "
-                                          "Ignored when full_targets is non-empty."}),
+                               "tooltip": "Blocks stored at full resolution (every head) in "
+                                          "hybrid mode. A block also listed in full_targets uses "
+                                          "full_targets' per-head selection instead (full_targets "
+                                          "wins for that one block); full_blocks still applies "
+                                          "normally to any block it doesn't cover -- the two can "
+                                          "be combined: coarse whole-block capture for exploration "
+                                          "(Query Map/Key Map/Zone Analysis) alongside fine "
+                                          "per-head capture for Head Freeze targets."}),
             "full_targets":    ("STRING",  {"default": "", "multiline": True,
-                               "tooltip": "Optional, hybrid mode only: restrict full-map storage "
-                                          "to specific (block, head) pairs instead of every head "
-                                          "of full_blocks -- saves RAM when you already know which "
-                                          "heads you'll feed into Head Freeze. Paste Head "
-                                          "Candidates' candidates_csv directly (one 'block,head' "
-                                          "per line), or type manually as "
-                                          "'block:head | block:head | ...'. Blocks/heads not "
-                                          "listed here won't have a full map available, so "
+                               "tooltip": "Optional, hybrid mode only: for the specific blocks "
+                                          "listed here, restrict full-map storage to specific "
+                                          "(block, head) pairs instead of every head -- saves RAM "
+                                          "when you already know which heads you'll feed into Head "
+                                          "Freeze. Paste Head Candidates' candidates_csv directly "
+                                          "(one 'block,head' per line), or type manually as "
+                                          "'block:head | block:head | ...'. Heads not listed for a "
+                                          "block covered here won't have a full map available, so "
                                           "Query Map/Key Map/Zone Analysis on them will error or "
-                                          "skip -- use Head Freeze/QKV Transfer for those, or "
-                                          "leave this blank and use full_blocks instead."}),
+                                          "skip -- use Head Freeze/QKV Transfer for those, or add "
+                                          "that block to full_blocks instead (not here) for full "
+                                          "multi-head coverage."}),
             "map_downsample":  ("INT",     {"default": 1, "min": 1, "max": 64}),
             "reset_store":     ("BOOLEAN", {"default": True}),
             "store_name":      ("STRING",  {"default": ""}),
