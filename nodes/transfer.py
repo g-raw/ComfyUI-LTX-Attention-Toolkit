@@ -19,7 +19,12 @@ class LTXAttentionHeadFreeze:
                                               "the same run. Paste Head Candidates' "
                                               "candidates_csv directly (one 'block,head' per "
                                               "line), or type manually as "
-                                              "'block:head | block:head | ...'."}),
+                                              "'block:head | block:head | ...'. Leave blank to "
+                                              "disable the freeze entirely -- this is the "
+                                              "reliable way to turn it off; ComfyUI's node "
+                                              "bypass/mute skips this node's cleanup, so the "
+                                              "diffusion_model (shared across runs) can be left "
+                                              "patched from a previous run."}),
             "freeze_from_step":   ("INT",   {"default": 3,  "min": 0, "max": 255}),
             "freeze_step_source": ("INT",   {"default": 3,  "min": 0, "max": 255}),
             "attn_type":          (["sa"],  {"default": "sa"}),
@@ -37,6 +42,20 @@ class LTXAttentionHeadFreeze:
     def apply_freeze(self, model, targets, freeze_from_step,
                      freeze_step_source, attn_type, blend_weight, store_handle):
 
+        pairs = parse_block_head_pairs(targets) if targets.strip() else []
+        if not pairs:
+            # Nothing to freeze — unwrap so a previous run's patch doesn't
+            # linger on this shared diffusion_model, then pass the model
+            # through untouched. This is the reliable way to disable Head
+            # Freeze: ComfyUI's node bypass/mute skips apply_freeze()
+            # entirely, so it can't clean up a stale patch from an earlier
+            # run — clearing `targets` (not bypassing the node) is what
+            # actually turns the effect off.
+            patched = model.clone()
+            unwrap_diffusion_model(patched.model.diffusion_model)
+            print("[LTXProfiler] HeadFreeze: no targets, passing model through unmodified.")
+            return (patched,)
+
         reg = get_registry()
         if store_handle and store_handle.strip():
             reg.switch_attn(store_handle)
@@ -45,10 +64,6 @@ class LTXAttentionHeadFreeze:
 
         store = AttentionStore()
         src   = store.sa if attn_type == "sa" else store.ca
-
-        pairs = parse_block_head_pairs(targets)
-        if not pairs:
-            raise ValueError("[Freeze] No (block, head) targets parsed from 'targets'.")
 
         # Resolve each target's frozen map up front, grouped by block so a
         # single hook can freeze several heads of the same block at once.

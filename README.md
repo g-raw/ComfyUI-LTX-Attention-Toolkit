@@ -243,7 +243,7 @@ that block).
 
 | Input | Type | Description |
 |---|---|---|
-| `targets` | STRING | One or more `(block, head)` pairs. Paste `Head Candidates`' `candidates_csv` directly (one `block,head` per line), or type manually as `block:head \| block:head \| ...` |
+| `targets` | STRING | One or more `(block, head)` pairs. Paste `Head Candidates`' `candidates_csv` directly (one `block,head` per line), or type manually as `block:head \| block:head \| ...`. Blank = disable (see below) |
 | `freeze_from_step` | INT | Step at which freeze activates |
 | `freeze_step_source` | INT | Which captured step's map to use |
 | `blend_weight` | FLOAT | 1.0 = pure frozen, 0.5 = 50/50 blend — shared across every target, no per-head override yet |
@@ -253,6 +253,16 @@ that block).
 target the same way. If you need different values per head, chain
 multiple `Head Freeze` nodes instead — `targets` only saves the chaining
 when the shared settings are fine.
+
+**To disable, clear `targets` — don't use ComfyUI's node bypass/mute.**
+This node patches the diffusion model's `_forward` directly, and that
+underlying model object is shared across every `model.clone()` in the
+session (not recreated per run). A normal execution unwraps that patch
+before reapplying it, but ComfyUI's bypass/mute skips the node's
+function entirely, so a stale patch from an earlier run is never
+cleaned up and stays in effect even though the node "looks" disabled.
+An empty `targets` field still runs the node's code, so it reliably
+unwraps and passes the model through untouched.
 
 **Effect on head 8, block 24:**
 Prevents the temporal window from shrinking during denoising →
