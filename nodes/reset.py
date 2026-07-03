@@ -21,6 +21,17 @@ class LTXResetPatches:
     FUNCTION     = "reset"
     CATEGORY     = "g_raw/LTX/Profiler"
 
+    @classmethod
+    def IS_CHANGED(cls, model):
+        # This node has no widgets, only a MODEL input -- ComfyUI would
+        # otherwise cache it and skip re-running reset() whenever nothing
+        # upstream changes, silently turning it into a no-op on repeat
+        # queues. Its entire job is the side effect (mutating the shared
+        # diffusion_model's layer registry), so it must run every time
+        # regardless of input identity. NaN != NaN, so this always
+        # compares as "changed".
+        return float("nan")
+
     def reset(self, model):
         patched = model.clone()
         reset_all_layers(patched.model.diffusion_model)
