@@ -325,26 +325,22 @@ class LTXQKVMultiplier:
                                        "patched from a previous run."}),
             "apply_sa":    ("BOOLEAN", {"default": True}),
             "apply_ca":    ("BOOLEAN", {"default": True}),
-            "q_mult":      ("FLOAT",   {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05,
+            "qk_mult":     ("FLOAT",   {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05,
                             "tooltip": "Scales Q for the targeted heads before the attention "
                                        "dot product -- changes attention sharpness (softmax "
                                        "logit scale), not the head's output magnitude. 0 makes "
                                        "the head attend uniformly over all keys, it does NOT "
-                                       "ablate it (still contributes via V)."}),
-            "k_mult":      ("FLOAT",   {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05,
-                            "tooltip": "Same as q_mult but for K. Same caveat: 0 flattens the "
-                                       "attention distribution, it doesn't remove the head's "
-                                       "contribution."}),
-            "v_mult":      ("FLOAT",   {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05,
-                            "tooltip": "Scales V for the targeted heads -- directly scales the "
-                                       "magnitude of what the head writes into the attention "
-                                       "output. 0 zeroes the head's contribution (true ablation)."}),
-            "o_mult":      ("FLOAT",   {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05,
-                            "tooltip": "Scales the targeted head's slice of the attention output "
-                                       "(post-softmax·V, before the block's shared output "
-                                       "projection) -- mathematically equivalent to scaling that "
-                                       "head's columns of the O weight matrix. 0 zeroes the "
-                                       "head's contribution (true ablation), same as v_mult=0."}),
+                                       "ablate it (still contributes via V). Scaling Q and K "
+                                       "separately would be redundant -- both are uniform "
+                                       "per-head scalars, so only their product changes the "
+                                       "logits, hence a single knob."}),
+            "vo_mult":     ("FLOAT",   {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05,
+                            "tooltip": "Scales the targeted head's output (V before the "
+                                       "attn_weights@V matmul, equivalently the head's slice of "
+                                       "the output after -- same net effect either way since the "
+                                       "matmul is linear in V, hence a single knob). Directly "
+                                       "scales the head's contribution to the residual stream. "
+                                       "0 zeroes it out (true ablation)."}),
             "from_step":   ("INT",     {"default": 0,   "min": 0, "max": 999,
                             "tooltip": "Denoising step (per targeted block) to start applying "
                                        "from. Defaults to the full range."}),
@@ -414,7 +410,7 @@ class LTXQKVMultiplier:
         return make_hook
 
     def apply_multiply(self, model, targets, apply_sa, apply_ca,
-                       q_mult, k_mult, v_mult, o_mult, from_step, to_step,
+                       qk_mult, vo_mult, from_step, to_step,
                        node_id=None):
 
         block_head_map = self._parse_targets(targets)
@@ -431,8 +427,8 @@ class LTXQKVMultiplier:
         install_hook()  # no-op if already installed -- see HeadFreeze's note
 
         per_block_configs = {
-            blk: [{"head_idx": h, "q_mult": q_mult, "k_mult": k_mult,
-                   "v_mult": v_mult, "o_mult": o_mult} for h in sorted(heads)]
+            blk: [{"head_idx": h, "qk_mult": qk_mult, "vo_mult": vo_mult}
+                  for h in sorted(heads)]
             for blk, heads in block_head_map.items()
         }
 
@@ -450,7 +446,7 @@ class LTXQKVMultiplier:
         )
         print(
             f"[LTXProfiler] QKVMultiplier targets=[{summary}] "
-            f"q={q_mult} k={k_mult} v={v_mult} o={o_mult} "
+            f"qk={qk_mult} vo={vo_mult} "
             f"sa={apply_sa} ca={apply_ca} steps=[{from_step},{to_step}]"
         )
         return (patched,)

@@ -4,13 +4,21 @@ from __future__ import annotations
 def apply_qkv_multiply(q, k, v, heads, cfg,
                         original_fn, extra_args, extra_kwargs,
                         attn_precision, transformer_options):
-    """Scale Q/K/V per head before the attention call, and/or scale the
-    per-head slice of the (pre-output-projection) attention output
-    afterward. Q/K scaling changes attention sharpness (it rescales the
-    softmax logits), not magnitude -- a head with q_mult=k_mult=0 still
-    contributes via uniform-attention-weighted V, it isn't ablated. V or
-    O scaling directly controls how much the head contributes to the
-    residual stream, so o_mult/v_mult=0 is what actually "kills" a head.
+    """Scale Q per head before the attention call (qk_mult), and/or scale
+    the per-head slice of the (pre-output-projection) attention output
+    afterward (vo_mult). Only two independent knobs: scaling Q and K
+    separately would just multiply through as (q_mult * k_mult) on the
+    softmax logits since both are uniform per-head scalars, so a single
+    qk_mult applied to Q alone has the identical effect. Same reasoning
+    for V/O -- V is scaled before the linear attn_weights @ V matmul, O
+    after, so a single vo_mult applied to the output alone is equivalent
+    to any v_mult * o_mult split.
+
+    qk_mult changes attention sharpness (rescales the softmax logits),
+    not magnitude -- a head with qk_mult=0 still contributes via
+    uniform-attention-weighted V, it isn't ablated. vo_mult directly
+    controls how much the head contributes to the residual stream, so
+    vo_mult=0 is what actually "kills" a head.
     """
     head_configs = cfg.get("head_configs", [])
     B, Sq, HD = q.shape
@@ -22,24 +30,19 @@ def apply_qkv_multiply(q, k, v, heads, cfg,
 
     D_head = HD // heads
 
-    need_qkv = any(c["q_mult"] != 1.0 or c["k_mult"] != 1.0 or c["v_mult"] != 1.0
-                   for c in head_configs)
-    need_o   = any(c["o_mult"] != 1.0 for c in head_configs)
+    need_q = any(c["qk_mult"] != 1.0 for c in head_configs)
+    need_o = any(c["vo_mult"] != 1.0 for c in head_configs)
 
-    q_mod, k_mod, v_mod = q, k, v
-    if need_qkv:
-        q_mod, k_mod, v_mod = q.clone(), k.clone(), v.clone()
+    q_mod = q
+    if need_q:
+        q_mod = q.clone()
         for c in head_configs:
-            h0 = c["head_idx"] * D_head
-            h1 = h0 + D_head
-            if c["q_mult"] != 1.0:
-                q_mod[:, :, h0:h1] *= c["q_mult"]
-            if c["k_mult"] != 1.0:
-                k_mod[:, :, h0:h1] *= c["k_mult"]
-            if c["v_mult"] != 1.0:
-                v_mod[:, :, h0:h1] *= c["v_mult"]
+            if c["qk_mult"] != 1.0:
+                h0 = c["head_idx"] * D_head
+                h1 = h0 + D_head
+                q_mod[:, :, h0:h1] *= c["qk_mult"]
 
-    out = original_fn(q_mod, k_mod, v_mod, heads, *extra_args,
+    out = original_fn(q_mod, k, v, heads, *extra_args,
                       attn_precision=attn_precision,
                       transformer_options=transformer_options,
                       **extra_kwargs)
@@ -47,9 +50,9 @@ def apply_qkv_multiply(q, k, v, heads, cfg,
     if need_o:
         out = out.clone()
         for c in head_configs:
-            if c["o_mult"] != 1.0:
+            if c["vo_mult"] != 1.0:
                 h0 = c["head_idx"] * D_head
                 h1 = h0 + D_head
-                out[:, :, h0:h1] *= c["o_mult"]
+                out[:, :, h0:h1] *= c["vo_mult"]
 
     return out
