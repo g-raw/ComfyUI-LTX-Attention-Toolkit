@@ -5,14 +5,14 @@ def apply_qkv_multiply(q, k, v, heads, cfg,
                         original_fn, extra_args, extra_kwargs,
                         attn_precision, transformer_options):
     """Scale Q per head before the attention call (qk_mult), and/or scale
-    the per-head slice of the (pre-output-projection) attention output
-    afterward (vo_mult). Only two independent knobs: scaling Q and K
-    separately would just multiply through as (q_mult * k_mult) on the
-    softmax logits since both are uniform per-head scalars, so a single
-    qk_mult applied to Q alone has the identical effect. Same reasoning
-    for V/O -- V is scaled before the linear attn_weights @ V matmul, O
-    after, so a single vo_mult applied to the output alone is equivalent
-    to any v_mult * o_mult split.
+    V per head before it too (vo_mult). Only two independent knobs:
+    scaling Q and K separately would just multiply through as
+    (q_mult * k_mult) on the softmax logits since both are uniform
+    per-head scalars, so a single qk_mult applied to Q alone has the
+    identical effect. Same reasoning for V/O -- attn_weights @ V is
+    linear in V, so scaling V before the matmul or scaling the output
+    after gives the identical result; scaling V here (like qk_mult
+    scales Q) avoids cloning the output tensor afterward.
 
     qk_mult changes attention sharpness (rescales the softmax logits),
     not magnitude -- a head with qk_mult=0 still contributes via
@@ -31,9 +31,9 @@ def apply_qkv_multiply(q, k, v, heads, cfg,
     D_head = HD // heads
 
     need_q = any(c["qk_mult"] != 1.0 for c in head_configs)
-    need_o = any(c["vo_mult"] != 1.0 for c in head_configs)
+    need_v = any(c["vo_mult"] != 1.0 for c in head_configs)
 
-    q_mod = q
+    q_mod, v_mod = q, v
     if need_q:
         q_mod = q.clone()
         for c in head_configs:
@@ -41,18 +41,15 @@ def apply_qkv_multiply(q, k, v, heads, cfg,
                 h0 = c["head_idx"] * D_head
                 h1 = h0 + D_head
                 q_mod[:, :, h0:h1] *= c["qk_mult"]
-
-    out = original_fn(q_mod, k, v, heads, *extra_args,
-                      attn_precision=attn_precision,
-                      transformer_options=transformer_options,
-                      **extra_kwargs)
-
-    if need_o:
-        out = out.clone()
+    if need_v:
+        v_mod = v.clone()
         for c in head_configs:
             if c["vo_mult"] != 1.0:
                 h0 = c["head_idx"] * D_head
                 h1 = h0 + D_head
-                out[:, :, h0:h1] *= c["vo_mult"]
+                v_mod[:, :, h0:h1] *= c["vo_mult"]
 
-    return out
+    return original_fn(q_mod, k, v_mod, heads, *extra_args,
+                       attn_precision=attn_precision,
+                       transformer_options=transformer_options,
+                       **extra_kwargs)
