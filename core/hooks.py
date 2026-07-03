@@ -72,7 +72,8 @@ def _make_full_hook(original_fn):
 
         block_idx = to.get("_profiler_block_idx",
                     to.get("_freeze_block_idx",
-                    to.get("_qkv_block_idx", None)))
+                    to.get("_qkv_block_idx",
+                    to.get("_qkvmul_block_idx", None))))
 
         if block_idx is None:
             return original_fn(q, k, v, heads, *args,
