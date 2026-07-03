@@ -7,6 +7,11 @@ Built for research on attention-based video generation control —
 spatial/temporal head specialization, attention map transfer,
 keypoint tracking and cross-modal (audio↔video) dynamics.
 
+**⚠️ Work in progress.** This toolkit is under active development. Node
+inputs/outputs, store formats, and naming can change at any time —
+including breaking changes without backward compatibility. Existing
+workflows and saved `.pt` files may stop working after an update.
+
 ---
 
 ## Features
