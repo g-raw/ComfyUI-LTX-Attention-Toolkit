@@ -59,6 +59,11 @@ class LTXAttentionHeadFreeze:
             print("[LTXProfiler] HeadFreeze: no targets, passing model through unmodified.")
             return (patched,)
 
+        install_hook()  # no-op if already installed (e.g. by Setup Capture) --
+        # needed here too since this node can run without a prior Setup
+        # Capture in the same session, and _freeze_* keys do nothing unless
+        # optimized_attention/optimized_attention_masked are wrapped.
+
         reg = get_registry()
         if store_handle and store_handle.strip():
             reg.switch_attn(store_handle)
@@ -241,6 +246,8 @@ class LTXQKVTransfer:
             return self._disable(model, "no component selected")
         if not targets.strip():
             return self._disable(model, "targets is blank")
+
+        install_hook()  # no-op if already installed -- see HeadFreeze's note
 
         reg = get_registry()
         if handle and handle.strip():
@@ -435,6 +442,8 @@ class LTXQKVMultiplier:
             unwrap_diffusion_model(patched.model.diffusion_model)
             print("[LTXProfiler] QKVMultiplier: no targets, passing model through unmodified.")
             return (patched,)
+
+        install_hook()  # no-op if already installed -- see HeadFreeze's note
 
         per_block_configs = {
             blk: [{"head_idx": h, "q_mult": q_mult, "k_mult": k_mult,
