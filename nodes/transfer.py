@@ -1,11 +1,10 @@
 from __future__ import annotations
-import types
 
 from ..core.stores      import AttentionStore, QKVStore, get_registry
 from ..core.hooks       import install_hook
-from ..core.model_patch import unwrap_diffusion_model
-from ..ops.freeze       import make_freeze_hook
-from ..utils.helpers    import parse_int_set, reset_call_count, parse_block_head_pairs
+from ..core.model_patch import register_layer, unregister_layer
+from ..ops.freeze       import make_freeze_hook_factory
+from ..utils.helpers    import reset_call_count, parse_block_head_pairs
 
 
 class LTXAttentionHeadFreeze:
@@ -35,7 +34,8 @@ class LTXAttentionHeadFreeze:
                                    "step": 0.05,
                                    "tooltip": "Shared across all targets — no per-head override yet."}),
             "store_handle":       ("STRING", {"default": "", "placeholder": "select store..."}),
-        }}
+        },
+        "hidden": {"node_id": "UNIQUE_ID"}}
 
     RETURN_TYPES = ("MODEL",)
     RETURN_NAMES = ("steered_model",)
@@ -43,19 +43,20 @@ class LTXAttentionHeadFreeze:
     CATEGORY     = "g_raw/LTX/Profiler"
 
     def apply_freeze(self, model, targets, freeze_from_step,
-                     freeze_step_source, attn_type, blend_weight, store_handle):
+                     freeze_step_source, attn_type, blend_weight, store_handle,
+                     node_id=None):
 
         pairs = parse_block_head_pairs(targets) if targets.strip() else []
         if not pairs:
-            # Nothing to freeze — unwrap so a previous run's patch doesn't
-            # linger on this shared diffusion_model, then pass the model
+            # Nothing to freeze — unregister just this node's own layer so a
+            # previous run's patch doesn't linger, then pass the model
             # through untouched. This is the reliable way to disable Head
             # Freeze: ComfyUI's node bypass/mute skips apply_freeze()
             # entirely, so it can't clean up a stale patch from an earlier
             # run — clearing `targets` (not bypassing the node) is what
             # actually turns the effect off.
             patched = model.clone()
-            unwrap_diffusion_model(patched.model.diffusion_model)
+            unregister_layer(patched.model.diffusion_model, node_id)
             print("[LTXProfiler] HeadFreeze: no targets, passing model through unmodified.")
             return (patched,)
 
@@ -110,49 +111,12 @@ class LTXAttentionHeadFreeze:
                     "frozen_map": entry_map[head_idx].float(),
                 })
 
-        patched       = model.clone()
-        dm            = patched.model.diffusion_model
-        unwrap_diffusion_model(dm)      # clean slate — see QKVTransfer for why
-        original_fwd  = dm._forward
-        step_counters = {}
-
-        def patched_forward(self_dm, x, timestep, context, attention_mask,
-                            frame_rate=25, transformer_options={},
-                            keyframe_idxs=None, **kwargs):
-
-            patches_replace = dict(transformer_options.get("patches_replace", {}))
-            dit_replace     = dict(patches_replace.get("dit", {}))
-
-            for block_idx, freeze_configs in block_configs.items():
-                existing = dit_replace.get(("double_block", block_idx))
-
-                if block_idx not in step_counters:
-                    step_counters[block_idx] = 0
-                current_step             = step_counters[block_idx]
-                step_counters[block_idx] += 1
-
-                if current_step >= freeze_from_step:
-                    dit_replace[("double_block", block_idx)] = make_freeze_hook(
-                        block_idx, freeze_configs, blend_weight,
-                        existing_hook=existing,
-                    )
-                else:
-                    if existing is not None:
-                        dit_replace[("double_block", block_idx)] = existing
-                    else:
-                        dit_replace.pop(("double_block", block_idx), None)
-
-            patches_replace["dit"] = dit_replace
-            transformer_options    = {**transformer_options,
-                                      "patches_replace": patches_replace}
-            return original_fwd(
-                x, timestep, context, attention_mask,
-                frame_rate, transformer_options, keyframe_idxs, **kwargs,
-            )
-
-        dm._forward                   = types.MethodType(patched_forward, dm)
-        dm._profiler_patched          = True
-        dm._profiler_original_forward = original_fwd
+        patched = model.clone()
+        dm      = patched.model.diffusion_model
+        register_layer(
+            dm, node_id, set(block_configs.keys()),
+            make_freeze_hook_factory(block_configs, freeze_from_step, blend_weight),
+        )
         summary = ", ".join(
             f"b{b}h{cfg['head_idx']}"
             for b, cfgs in block_configs.items() for cfg in cfgs
@@ -193,7 +157,8 @@ class LTXQKVTransfer:
             "sim_threshold":      ("FLOAT",   {"default": 0.3,
                                    "min": -1.0, "max": 1.0, "step": 0.05}),
             "handle":             ("STRING",  {"default": "", "placeholder": "select store..."}),
-        }}
+        },
+        "hidden": {"node_id": "UNIQUE_ID"}}
 
     RETURN_TYPES = ("MODEL",)
     RETURN_NAMES = ("transfer_model",)
@@ -222,30 +187,60 @@ class LTXQKVTransfer:
         return block_head_map
 
     @staticmethod
-    def _disable(model, reason: str):
-        """Clone + unwrap + pass through untouched. diffusion_model is
-        shared across every model.clone() in the session, so silently
-        returning the input `model` here (as this used to do) can leave a
-        previous run's transfer patch in effect -- same class of bug as
-        Head Freeze's blank-targets fix. Reached only when this node's own
-        code actually runs (unlike ComfyUI's bypass/mute, which skips it
-        entirely and can't clean up a stale patch either)."""
-        print(f"[LTXProfiler] QKVTransfer: {reason}, passing model through unmodified.")
-        patched = model.clone()
-        unwrap_diffusion_model(patched.model.diffusion_model)
-        return (patched,)
+    def _make_transfer_hook_factory(per_block_configs, qkv_store, attn_type,
+                                    target_call_n, transfer_from_step, transfer_to_step):
+        """Returns a make_hook(block_idx, existing_hook) -> hook|None for
+        register_layer(). Owns a fresh per-block step counter (one per
+        node run, dropped along with the old layer on re-registration --
+        same leak-safety property the old unwrap-before-wrap had, without
+        wiping other nodes' layers)."""
+        step_counters: dict = {}
+
+        def make_hook(block_idx, existing_hook):
+            head_configs = per_block_configs.get(block_idx)
+            if head_configs is None:
+                return None
+
+            current_step             = step_counters.get(block_idx, 0)
+            step_counters[block_idx] = current_step + 1
+            if not (transfer_from_step <= current_step <= transfer_to_step):
+                return None
+
+            cfg = {
+                "head_configs":  head_configs,
+                "qkv_store":     qkv_store,
+                "attn_type":     attn_type,
+                "target_call_n": target_call_n,
+                "block_idx":     block_idx,
+                "current_step":  current_step,
+                "step_range":    (transfer_from_step, transfer_to_step),
+            }
+
+            def hook(args, orig):
+                to = dict(args.get("transformer_options", {}))
+                to["_qkv_block_idx"]       = block_idx
+                to["_qkv_transfer_active"] = True
+                to["_qkv_transfer_cfg"]    = cfg
+                reset_call_count(block_idx)
+                new_args = {**args, "transformer_options": to}
+                if existing_hook is not None:
+                    return existing_hook(new_args, orig)
+                return orig["original_block"](new_args)
+            return hook
+
+        return make_hook
 
     def apply_transfer(self, model, attn_type, targets,
                        source_step, transfer_from_step, transfer_to_step,
                        blend, use_map, use_q, use_k, use_v,
-                       sim_filter, sim_threshold, handle):
+                       sim_filter, sim_threshold, handle, node_id=None):
 
         if use_map:
             use_q = use_k = use_v = False
         if not any([use_map, use_q, use_k, use_v]):
-            return self._disable(model, "no component selected")
+            return self._disable(model, node_id, "no component selected")
         if not targets.strip():
-            return self._disable(model, "targets is blank")
+            return self._disable(model, node_id, "targets is blank")
 
         install_hook()  # no-op if already installed -- see HeadFreeze's note
 
@@ -284,79 +279,29 @@ class LTXQKVTransfer:
             for blk, heads in block_head_map.items()
         }
 
-        patched       = model.clone()
-        dm            = patched.model.diffusion_model
-        unwrap_diffusion_model(dm)
-        original_fwd  = dm._forward
-        step_counters = {}
+        patched = model.clone()
+        dm      = patched.model.diffusion_model
+        register_layer(
+            dm, node_id, set(per_block_configs.keys()),
+            self._make_transfer_hook_factory(
+                per_block_configs, qkv_store, attn_type, target_call_n,
+                transfer_from_step, transfer_to_step,
+            ),
+        )
+        return (patched,)
 
-        def patched_forward(self_dm, x, timestep, context, attention_mask,
-                            frame_rate=25, transformer_options={},
-                            keyframe_idxs=None, **kwargs):
-
-            from ..ops.qkv_transfer import apply_qkv_transfer
-
-            patches_replace = dict(transformer_options.get("patches_replace", {}))
-            dit_replace     = dict(patches_replace.get("dit", {}))
-
-            for blk_idx, head_configs in per_block_configs.items():
-                if blk_idx not in step_counters:
-                    step_counters[blk_idx] = 0
-                current_step             = step_counters[blk_idx]
-                step_counters[blk_idx]  += 1
-                in_range                 = (transfer_from_step
-                                            <= current_step
-                                            <= transfer_to_step)
-                existing = dit_replace.get(("double_block", blk_idx))
-
-                if in_range:
-                    tcfg = {
-                        "head_configs":  head_configs,
-                        "qkv_store":     qkv_store,
-                        "attn_type":     attn_type,
-                        "target_call_n": target_call_n,
-                        "block_idx":     blk_idx,
-                        "current_step":  current_step,
-                        "step_range":    (transfer_from_step, transfer_to_step),
-                    }
-
-                    def make_hook(cfg, existing_h, bidx):
-                        def hook(args, orig):
-                            to = dict(args.get("transformer_options", {}))
-                            to["_qkv_block_idx"]       = bidx
-                            to["_qkv_transfer_active"] = True
-                            to["_qkv_transfer_cfg"]    = cfg
-                            reset_call_count(bidx)
-                            new_args = {**args, "transformer_options": to}
-                            if existing_h and not getattr(existing_h,
-                                                          "_is_transfer_hook", False):
-                                return existing_h(new_args, orig)
-                            return orig["original_block"](new_args)
-                        hook._is_transfer_hook = True
-                        return hook
-
-                    dit_replace[("double_block", blk_idx)] = make_hook(
-                        tcfg, existing, blk_idx
-                    )
-                else:
-                    cur = dit_replace.get(("double_block", blk_idx))
-                    if getattr(cur, "_is_transfer_hook", False):
-                        if existing and not getattr(existing, "_is_transfer_hook", False):
-                            dit_replace[("double_block", blk_idx)] = existing
-                        else:
-                            dit_replace.pop(("double_block", blk_idx), None)
-
-            patches_replace["dit"] = dit_replace
-            transformer_options    = {**transformer_options,
-                                      "patches_replace": patches_replace}
-            return original_fwd(
-                x, timestep, context, attention_mask,
-                frame_rate, transformer_options, keyframe_idxs, **kwargs,
-            )
-
-        dm._forward                   = types.MethodType(patched_forward, dm)
-        dm._profiler_patched          = True
-        dm._profiler_original_forward = original_fwd
+    @staticmethod
+    def _disable(model, node_id, reason: str):
+        """Clone + unregister-own-layer + pass through untouched.
+        diffusion_model is shared across every model.clone() in the
+        session, so silently returning the input `model` here (as this
+        used to do) can leave a previous run's transfer patch in effect.
+        Reached only when this node's own code actually runs (unlike
+        ComfyUI's bypass/mute, which skips it entirely and can't clean up
+        a stale patch either)."""
+        print(f"[LTXProfiler] QKVTransfer: {reason}, passing model through unmodified.")
+        patched = model.clone()
+        unregister_layer(patched.model.diffusion_model, node_id)
         return (patched,)
 
 
@@ -406,7 +351,8 @@ class LTXQKVMultiplier:
             "to_step":     ("INT",     {"default": 999, "min": 0, "max": 999,
                             "tooltip": "Denoising step (per targeted block) to stop applying "
                                        "at, inclusive. Defaults to the full range."}),
-        }}
+        },
+        "hidden": {"node_id": "UNIQUE_ID"}}
 
     RETURN_TYPES = ("MODEL",)
     RETURN_NAMES = ("steered_model",)
@@ -429,8 +375,47 @@ class LTXQKVMultiplier:
             block_head_map.setdefault(blk, set()).update(heads)
         return block_head_map
 
+    @staticmethod
+    def _make_multiply_hook_factory(per_block_configs, apply_sa, apply_ca,
+                                    from_step, to_step):
+        """Returns a make_hook(block_idx, existing_hook) -> hook|None for
+        register_layer(). Owns a fresh per-block step counter (one per
+        node run, dropped along with the old layer on re-registration)."""
+        step_counters: dict = {}
+
+        def make_hook(block_idx, existing_hook):
+            head_configs = per_block_configs.get(block_idx)
+            if head_configs is None:
+                return None
+
+            current_step             = step_counters.get(block_idx, 0)
+            step_counters[block_idx] = current_step + 1
+            if not (from_step <= current_step <= to_step):
+                return None
+
+            cfg = {
+                "head_configs": head_configs,
+                "apply_sa":     apply_sa,
+                "apply_ca":     apply_ca,
+            }
+
+            def hook(args, orig):
+                to = dict(args.get("transformer_options", {}))
+                to["_qkvmul_block_idx"] = block_idx
+                to["_qkvmul_active"]    = True
+                to["_qkvmul_cfg"]       = cfg
+                reset_call_count(block_idx)
+                new_args = {**args, "transformer_options": to}
+                if existing_hook is not None:
+                    return existing_hook(new_args, orig)
+                return orig["original_block"](new_args)
+            return hook
+
+        return make_hook
+
     def apply_multiply(self, model, targets, apply_sa, apply_ca,
-                       q_mult, k_mult, v_mult, o_mult, from_step, to_step):
+                       q_mult, k_mult, v_mult, o_mult, from_step, to_step,
+                       node_id=None):
 
         block_head_map = self._parse_targets(targets)
         if not block_head_map:
@@ -439,7 +424,7 @@ class LTXQKVMultiplier:
             # turns the effect off, since bypass/mute skips this code and
             # can't clean up a stale patch on the shared diffusion_model.
             patched = model.clone()
-            unwrap_diffusion_model(patched.model.diffusion_model)
+            unregister_layer(patched.model.diffusion_model, node_id)
             print("[LTXProfiler] QKVMultiplier: no targets, passing model through unmodified.")
             return (patched,)
 
@@ -451,71 +436,14 @@ class LTXQKVMultiplier:
             for blk, heads in block_head_map.items()
         }
 
-        patched       = model.clone()
-        dm            = patched.model.diffusion_model
-        unwrap_diffusion_model(dm)
-        original_fwd  = dm._forward
-        step_counters = {}
-
-        def patched_forward(self_dm, x, timestep, context, attention_mask,
-                            frame_rate=25, transformer_options={},
-                            keyframe_idxs=None, **kwargs):
-
-            patches_replace = dict(transformer_options.get("patches_replace", {}))
-            dit_replace     = dict(patches_replace.get("dit", {}))
-
-            for blk_idx, head_configs in per_block_configs.items():
-                if blk_idx not in step_counters:
-                    step_counters[blk_idx] = 0
-                current_step             = step_counters[blk_idx]
-                step_counters[blk_idx]  += 1
-                in_range                 = (from_step <= current_step <= to_step)
-                existing                 = dit_replace.get(("double_block", blk_idx))
-
-                if in_range:
-                    mcfg = {
-                        "head_configs": head_configs,
-                        "apply_sa":     apply_sa,
-                        "apply_ca":     apply_ca,
-                    }
-
-                    def make_hook(cfg, existing_h, bidx):
-                        def hook(args, orig):
-                            to = dict(args.get("transformer_options", {}))
-                            to["_qkvmul_block_idx"] = bidx
-                            to["_qkvmul_active"]    = True
-                            to["_qkvmul_cfg"]       = cfg
-                            reset_call_count(bidx)
-                            new_args = {**args, "transformer_options": to}
-                            if existing_h and not getattr(existing_h,
-                                                          "_is_qkvmul_hook", False):
-                                return existing_h(new_args, orig)
-                            return orig["original_block"](new_args)
-                        hook._is_qkvmul_hook = True
-                        return hook
-
-                    dit_replace[("double_block", blk_idx)] = make_hook(
-                        mcfg, existing, blk_idx
-                    )
-                else:
-                    cur = dit_replace.get(("double_block", blk_idx))
-                    if getattr(cur, "_is_qkvmul_hook", False):
-                        if existing and not getattr(existing, "_is_qkvmul_hook", False):
-                            dit_replace[("double_block", blk_idx)] = existing
-                        else:
-                            dit_replace.pop(("double_block", blk_idx), None)
-
-            patches_replace["dit"] = dit_replace
-            transformer_options    = {**transformer_options,
-                                      "patches_replace": patches_replace}
-            return original_fwd(
-                x, timestep, context, attention_mask,
-                frame_rate, transformer_options, keyframe_idxs, **kwargs,
-            )
-
-        dm._forward                   = types.MethodType(patched_forward, dm)
-        dm._profiler_patched          = True
-        dm._profiler_original_forward = original_fwd
+        patched = model.clone()
+        dm      = patched.model.diffusion_model
+        register_layer(
+            dm, node_id, set(per_block_configs.keys()),
+            self._make_multiply_hook_factory(
+                per_block_configs, apply_sa, apply_ca, from_step, to_step,
+            ),
+        )
         summary = ", ".join(
             f"b{b}h{sorted(h['head_idx'] for h in cfgs)}"
             for b, cfgs in per_block_configs.items()

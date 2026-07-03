@@ -361,6 +361,7 @@ instead.
 | `LTX Attn — Store Inspect` | Print AttentionStore contents (incl. key/query map presence) |
 | `LTX Attn — QKV Store Inspect` | Print QKVStore contents |
 | `LTX Attn — Latent Dims` | Extract T/H/W from a LATENT |
+| `LTX Attn — Reset Patches` | Clear every registered intervention/capture layer on a model and restore the pristine forward — see "Chaining multiple intervention/capture nodes" below |
 
 `Store Dump`/`Store Load` take a single `handle` STRING input — the
 same name is used to resolve both the attn store and the QKV store,
@@ -558,6 +559,26 @@ Priority order per call:
 5. Head Freeze → map injection
 6. Normal pass-through
 
+### Chaining multiple intervention/capture nodes
+
+Every intervention/capture node (`Setup Capture`, `Head Freeze`, `QKV
+Transfer`, `QKV Multiplier`) registers its own contribution into a
+shared, named layer registry on the underlying `diffusion_model` (keyed
+by ComfyUI's stable per-node `unique_id`) instead of hand-rolling its
+own `_forward` wrap. This means you *can* chain several of these nodes
+in the same graph — e.g. two `QKV Multiplier` nodes targeting different
+blocks, or `Head Freeze` + `QKV Multiplier` together — and each one's
+effect stacks rather than silently overwriting the others. Re-running
+the same node in place (a normal requeue) replaces only its own entry,
+so nothing accumulates across repeated runs.
+
+**Caveat:** if you delete or rewire a node out of the graph entirely,
+its last-registered layer has no way to know it should remove itself —
+nothing calls its cleanup on a node_id that stops executing. Run `LTX
+Attn — Reset Patches` once (any point downstream of the model) to clear
+every registered layer and fully restore the pristine model if you've
+been iterating on your graph and suspect a stale layer is still applying.
+
 ### Why visualization/intervention nodes use a typed `store_handle` string
 
 Captured data is written into the registry as a side effect of the
@@ -577,8 +598,6 @@ fall back to whichever store is currently active.
 ## Limitations & known issues
 
 - LTX-2.3 only (48 transformer blocks, 32 heads, `patch_size=1`)
-- SA freeze currently supports single head per node instance
-  (chain multiple HeadFreeze nodes for multi-head intervention)
 - Full map storage at native resolution (3520×3520 per head)
   requires ~25 MB/head — use `map_downsample` or `hybrid` mode
 - Audio stream is not profiled (video stream only)

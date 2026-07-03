@@ -9,6 +9,7 @@ from .nodes.utils           import (LTXLatentDims, LTXAttentionCompareRuns,
                                    LTXAttentionHeadCandidates)
 from .nodes.zone_analysis   import LTXAttentionZoneAnalysis
 from .nodes.rf_inversion    import LTXRFForwardSampler, LTXRFReverseSampler
+from .nodes.reset           import LTXResetPatches
 
 NODE_CLASS_MAPPINGS = {
     # Capture
@@ -37,6 +38,8 @@ NODE_CLASS_MAPPINGS = {
     #RF Inversion
     "LTXRFForwardSampler":           LTXRFForwardSampler,
     "LTXRFReverseSampler":           LTXRFReverseSampler,
+    # Maintenance
+    "LTXResetPatches":               LTXResetPatches,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -59,4 +62,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXAttentionHeadCandidates":    "LTX Attn — Head Candidates",
     "LTXRFForwardSampler":           "LTX Attn — RF-Inv Forward (x0→xT)",
     "LTXRFReverseSampler":           "LTX Attn — RF-Inv Reverse (xT→x0)",
+    "LTXResetPatches":               "LTX Attn — Reset Patches",
 }

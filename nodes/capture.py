@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ..core.stores      import get_registry
 from ..core.hooks       import install_hook
-from ..core.model_patch import wrap_diffusion_model, unwrap_diffusion_model
+from ..core.model_patch import register_layer, make_profiler_hook_factory
 from ..utils.helpers    import parse_int_set, parse_block_head_pairs
 
 
@@ -68,7 +68,8 @@ class LTXAttentionCaptureSetup:
 
             "store_name":      ("STRING",  {"default": ""}),
             "reset_store":     ("BOOLEAN", {"default": True}),
-        }}
+        },
+        "hidden": {"node_id": "UNIQUE_ID"}}
 
     # STRING, not a custom type -- must match the plain STRING handle
     # inputs on every downstream node (Head Freeze, QKV Transfer, Grid
@@ -80,7 +81,7 @@ class LTXAttentionCaptureSetup:
 
     def setup(self, model, capture_sa, capture_ca, target_blocks, target_heads,
               capture_steps, store_mode, full_blocks, full_targets, map_downsample,
-              capture_qkv, qkv_targets, store_name, reset_store):
+              capture_qkv, qkv_targets, store_name, reset_store, node_id=None):
 
         # Validate reset_store is a boolean
         if not isinstance(reset_store, (bool, int)):
@@ -147,11 +148,6 @@ class LTXAttentionCaptureSetup:
             "full_blocks":      full_block_set,
             "full_target_map":  full_target_map,
             "map_downsample":   map_downsample,
-            # Cross-store bookkeeping consumed only by wrap_diffusion_model's
-            # block-hook-installation loop (core/model_patch.py), not by
-            # _attn_record -- QKV capture's own filtering reads the same
-            # map from qkv_inst.cfg below.
-            "target_block_map": qkv_target_map,
         }
 
         if capture_qkv:
@@ -168,11 +164,37 @@ class LTXAttentionCaptureSetup:
                 "capture_ca":       capture_ca,
             }
 
+        attn_blocks = parsed_blocks
+        qkv_blocks  = set(qkv_target_map.keys()) if qkv_target_map else set()
+
+        timestep_ref   = [0.0]
+        num_frames_ref = [1]
+        ppf_ref        = [1]
+        h_lat_ref      = [1]
+        w_lat_ref      = [1]
+
+        def on_call(x, timestep, transformer_options):
+            vx = x[0] if isinstance(x, (list, tuple)) else x
+            if vx.dim() == 5:
+                _, _, F_lat, H_lat, W_lat = vx.shape
+                num_frames_ref[0] = F_lat
+                ppf_ref[0]        = H_lat * W_lat
+                h_lat_ref[0]      = H_lat
+                w_lat_ref[0]      = W_lat
+            ts = timestep[0] if isinstance(timestep, (list, tuple)) else timestep
+            timestep_ref[0] = float(ts.mean().item())
+
         install_hook()
         patched = model.clone()
         dm      = patched.model.diffusion_model
-        unwrap_diffusion_model(dm)
-        wrap_diffusion_model(dm, inst.cfg)
+        register_layer(
+            dm, node_id, attn_blocks | qkv_blocks,
+            make_profiler_hook_factory(
+                timestep_ref, num_frames_ref, ppf_ref, h_lat_ref, w_lat_ref,
+                inst.cfg, attn_blocks, qkv_blocks,
+            ),
+            on_call=on_call,
+        )
 
         full_summary = ""
         if store_mode == "hybrid":

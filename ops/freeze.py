@@ -7,22 +7,41 @@ import torch.nn.functional as F
 from ..utils.helpers import reset_call_count
 
 
-def make_freeze_hook(block_idx: int, freeze_configs: list,
-                     blend_weight: float, existing_hook=None):
-    """freeze_configs: list of {"head_idx": int, "frozen_map": Tensor} —
-    one block can freeze several heads in a single hook/attention call."""
-    def hook(args: dict, orig: dict):
-        to = dict(args.get("transformer_options", {}))
-        to["_freeze_block_idx"] = block_idx
-        to["_freeze_configs"]   = freeze_configs
-        to["_freeze_blend"]     = blend_weight
-        reset_call_count(block_idx)
-        new_args = {**args, "transformer_options": to}
-        if existing_hook is not None:
-            return existing_hook(new_args, orig)
-        return orig["original_block"](new_args)
-    hook._is_freeze_hook = True
-    return hook
+def make_freeze_hook_factory(block_configs: dict, freeze_from_step: int,
+                             blend_weight: float):
+    """Returns a make_hook(block_idx, existing_hook) -> hook callable, for
+    register_layer(). block_configs: {block_idx: [{"head_idx": int,
+    "frozen_map": Tensor}, ...]} -- one block can freeze several heads in
+    a single hook/attention call. Tracks its own per-block step counter
+    (fresh each time this factory is built, i.e. fresh each node run) so
+    the freeze only activates once current_step >= freeze_from_step;
+    before that, returns None so the call falls through to whatever
+    earlier layers/the original block already contribute."""
+    step_counters: dict = {}
+
+    def make_hook(block_idx, existing_hook):
+        freeze_configs = block_configs.get(block_idx)
+        if freeze_configs is None:
+            return None
+
+        current_step             = step_counters.get(block_idx, 0)
+        step_counters[block_idx] = current_step + 1
+        if current_step < freeze_from_step:
+            return None
+
+        def hook(args: dict, orig: dict):
+            to = dict(args.get("transformer_options", {}))
+            to["_freeze_block_idx"] = block_idx
+            to["_freeze_configs"]   = freeze_configs
+            to["_freeze_blend"]     = blend_weight
+            reset_call_count(block_idx)
+            new_args = {**args, "transformer_options": to}
+            if existing_hook is not None:
+                return existing_hook(new_args, orig)
+            return orig["original_block"](new_args)
+        return hook
+
+    return make_hook
 
 
 def apply_head_freeze(q, k, v, heads, freeze_configs,
