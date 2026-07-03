@@ -56,15 +56,17 @@ def _make_full_hook(original_fn):
       1. Profiling      → AttentionStore
       2. QKV Capture    → QKVStore
       3. QKV Transfer   → substitution Q/K/V
-      4. Head Freeze    → frozen map
-      5. Normal         → delegation
+      4. QKV Multiplier → per-head Q/K/V/O scaling
+      5. Head Freeze    → frozen map
+      6. Normal         → delegation
     """
 
     def hooked(q, k, v, heads, *args,
                attn_precision=None, transformer_options=None, **kwargs):
 
-        from ..ops.freeze       import apply_head_freeze
-        from ..ops.qkv_transfer import apply_qkv_transfer
+        from ..ops.freeze        import apply_head_freeze
+        from ..ops.qkv_transfer  import apply_qkv_transfer
+        from ..ops.qkv_multiply  import apply_qkv_multiply
 
         to = transformer_options or {}
 
@@ -152,7 +154,19 @@ def _make_full_hook(original_fn):
                 attn_precision, transformer_options,
             )
 
-        # ── 4. Head Freeze ───────────────────────────────────────────────────
+        # ── 4. QKV Multiplier ───────────────────────────────────────────────
+        if to.get("_qkvmul_active"):
+            mcfg      = to.get("_qkvmul_cfg", {})
+            apply_sa  = mcfg.get("apply_sa", True)
+            apply_ca  = mcfg.get("apply_ca", True)
+            if (is_sa and apply_sa) or (is_ca and apply_ca):
+                return apply_qkv_multiply(
+                    q, k, v, heads, mcfg,
+                    original_fn, args, kwargs,
+                    attn_precision, transformer_options,
+                )
+
+        # ── 5. Head Freeze ───────────────────────────────────────────────────
         if to.get("_freeze_configs") and is_sa:
             return apply_head_freeze(
                 q, k, v, heads,
@@ -162,7 +176,7 @@ def _make_full_hook(original_fn):
                 attn_precision, transformer_options,
             )
 
-        # ── 5. Normal ────────────────────────────────────────────────────────
+        # ── 6. Normal ────────────────────────────────────────────────────────
         return original_fn(q, k, v, heads, *args,
                            attn_precision=attn_precision,
                            transformer_options=transformer_options,

@@ -351,3 +351,169 @@ class LTXQKVTransfer:
         dm._profiler_patched          = True
         dm._profiler_original_forward = original_fwd
         return (patched,)
+
+
+class LTXQKVMultiplier:
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "model":       ("MODEL",),
+            "targets":     ("STRING", {"default": "24:8", "multiline": True,
+                            "tooltip": "Same format as Head Freeze/QKV Transfer's targets: "
+                                       "paste Head Candidates' candidates_csv directly (one "
+                                       "'block,head' per line), or type manually as "
+                                       "'block:head | block:h1,h2,... | block:all | ...'. A "
+                                       "whole-string 'all' (or 'all:all') targets every block "
+                                       "(0-47) and head (0-31). No prior capture needed -- this "
+                                       "is a live multiply, not a replay. Leave blank to disable "
+                                       "entirely -- this is the reliable way to turn it off; "
+                                       "ComfyUI's node bypass/mute skips this node's cleanup, so "
+                                       "the diffusion_model (shared across runs) can be left "
+                                       "patched from a previous run."}),
+            "apply_sa":    ("BOOLEAN", {"default": True}),
+            "apply_ca":    ("BOOLEAN", {"default": True}),
+            "q_mult":      ("FLOAT",   {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05,
+                            "tooltip": "Scales Q for the targeted heads before the attention "
+                                       "dot product -- changes attention sharpness (softmax "
+                                       "logit scale), not the head's output magnitude. 0 makes "
+                                       "the head attend uniformly over all keys, it does NOT "
+                                       "ablate it (still contributes via V)."}),
+            "k_mult":      ("FLOAT",   {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05,
+                            "tooltip": "Same as q_mult but for K. Same caveat: 0 flattens the "
+                                       "attention distribution, it doesn't remove the head's "
+                                       "contribution."}),
+            "v_mult":      ("FLOAT",   {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05,
+                            "tooltip": "Scales V for the targeted heads -- directly scales the "
+                                       "magnitude of what the head writes into the attention "
+                                       "output. 0 zeroes the head's contribution (true ablation)."}),
+            "o_mult":      ("FLOAT",   {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05,
+                            "tooltip": "Scales the targeted head's slice of the attention output "
+                                       "(post-softmax·V, before the block's shared output "
+                                       "projection) -- mathematically equivalent to scaling that "
+                                       "head's columns of the O weight matrix. 0 zeroes the "
+                                       "head's contribution (true ablation), same as v_mult=0."}),
+            "from_step":   ("INT",     {"default": 0,   "min": 0, "max": 999,
+                            "tooltip": "Denoising step (per targeted block) to start applying "
+                                       "from. Defaults to the full range."}),
+            "to_step":     ("INT",     {"default": 999, "min": 0, "max": 999,
+                            "tooltip": "Denoising step (per targeted block) to stop applying "
+                                       "at, inclusive. Defaults to the full range."}),
+        }}
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("steered_model",)
+    FUNCTION     = "apply_multiply"
+    CATEGORY     = "g_raw/LTX/Profiler"
+
+    @staticmethod
+    def _parse_targets(targets: str) -> dict:
+        """Same whole-string 'all'/'all:all' convention as Setup Capture's
+        qkv_targets -- no store to resolve 'all' against here, so it just
+        means every block (0-47) and every head (0-31)."""
+        t = targets.strip()
+        if not t:
+            return {}
+        if t.lower() in ("all", "all:all"):
+            return {b: set(range(32)) for b in range(48)}
+        block_head_map: dict[int, set] = {}
+        for blk, head_sel in parse_block_head_pairs(targets):
+            heads = set(range(32)) if head_sel == "all" else {head_sel}
+            block_head_map.setdefault(blk, set()).update(heads)
+        return block_head_map
+
+    def apply_multiply(self, model, targets, apply_sa, apply_ca,
+                       q_mult, k_mult, v_mult, o_mult, from_step, to_step):
+
+        block_head_map = self._parse_targets(targets)
+        if not block_head_map:
+            # Same reliable-disable convention as Head Freeze/QKV Transfer --
+            # clearing `targets` (not bypassing the node) is what actually
+            # turns the effect off, since bypass/mute skips this code and
+            # can't clean up a stale patch on the shared diffusion_model.
+            patched = model.clone()
+            unwrap_diffusion_model(patched.model.diffusion_model)
+            print("[LTXProfiler] QKVMultiplier: no targets, passing model through unmodified.")
+            return (patched,)
+
+        per_block_configs = {
+            blk: [{"head_idx": h, "q_mult": q_mult, "k_mult": k_mult,
+                   "v_mult": v_mult, "o_mult": o_mult} for h in sorted(heads)]
+            for blk, heads in block_head_map.items()
+        }
+
+        patched       = model.clone()
+        dm            = patched.model.diffusion_model
+        unwrap_diffusion_model(dm)
+        original_fwd  = dm._forward
+        step_counters = {}
+
+        def patched_forward(self_dm, x, timestep, context, attention_mask,
+                            frame_rate=25, transformer_options={},
+                            keyframe_idxs=None, **kwargs):
+
+            patches_replace = dict(transformer_options.get("patches_replace", {}))
+            dit_replace     = dict(patches_replace.get("dit", {}))
+
+            for blk_idx, head_configs in per_block_configs.items():
+                if blk_idx not in step_counters:
+                    step_counters[blk_idx] = 0
+                current_step             = step_counters[blk_idx]
+                step_counters[blk_idx]  += 1
+                in_range                 = (from_step <= current_step <= to_step)
+                existing                 = dit_replace.get(("double_block", blk_idx))
+
+                if in_range:
+                    mcfg = {
+                        "head_configs": head_configs,
+                        "apply_sa":     apply_sa,
+                        "apply_ca":     apply_ca,
+                    }
+
+                    def make_hook(cfg, existing_h, bidx):
+                        def hook(args, orig):
+                            to = dict(args.get("transformer_options", {}))
+                            to["_qkvmul_block_idx"] = bidx
+                            to["_qkvmul_active"]    = True
+                            to["_qkvmul_cfg"]       = cfg
+                            reset_call_count(bidx)
+                            new_args = {**args, "transformer_options": to}
+                            if existing_h and not getattr(existing_h,
+                                                          "_is_qkvmul_hook", False):
+                                return existing_h(new_args, orig)
+                            return orig["original_block"](new_args)
+                        hook._is_qkvmul_hook = True
+                        return hook
+
+                    dit_replace[("double_block", blk_idx)] = make_hook(
+                        mcfg, existing, blk_idx
+                    )
+                else:
+                    cur = dit_replace.get(("double_block", blk_idx))
+                    if getattr(cur, "_is_qkvmul_hook", False):
+                        if existing and not getattr(existing, "_is_qkvmul_hook", False):
+                            dit_replace[("double_block", blk_idx)] = existing
+                        else:
+                            dit_replace.pop(("double_block", blk_idx), None)
+
+            patches_replace["dit"] = dit_replace
+            transformer_options    = {**transformer_options,
+                                      "patches_replace": patches_replace}
+            return original_fwd(
+                x, timestep, context, attention_mask,
+                frame_rate, transformer_options, keyframe_idxs, **kwargs,
+            )
+
+        dm._forward                   = types.MethodType(patched_forward, dm)
+        dm._profiler_patched          = True
+        dm._profiler_original_forward = original_fwd
+        summary = ", ".join(
+            f"b{b}h{sorted(h['head_idx'] for h in cfgs)}"
+            for b, cfgs in per_block_configs.items()
+        )
+        print(
+            f"[LTXProfiler] QKVMultiplier targets=[{summary}] "
+            f"q={q_mult} k={k_mult} v={v_mult} o={o_mult} "
+            f"sa={apply_sa} ca={apply_ca} steps=[{from_step},{to_step}]"
+        )
+        return (patched,)

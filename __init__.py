@@ -1,5 +1,5 @@
 from .nodes.capture         import LTXAttentionCaptureSetup
-from .nodes.transfer        import LTXAttentionHeadFreeze, LTXQKVTransfer
+from .nodes.transfer        import LTXAttentionHeadFreeze, LTXQKVTransfer, LTXQKVMultiplier
 from .nodes.visualize       import (LTXAttentionQueryMap, LTXAttentionKeyMap,
                                    LTXAttentionMetricsViz, LTXAttentionGridViz)
 from .nodes.evolution       import LTXAttentionTimestepEvolution
@@ -16,6 +16,7 @@ NODE_CLASS_MAPPINGS = {
     # Transfer / Intervention
     "LTXAttentionHeadFreeze":        LTXAttentionHeadFreeze,
     "LTXQKVTransfer":                LTXQKVTransfer,
+    "LTXQKVMultiplier":              LTXQKVMultiplier,
     # Visualisation
     "LTXAttentionQueryMap":          LTXAttentionQueryMap,
     "LTXAttentionKeyMap":            LTXAttentionKeyMap,
@@ -42,6 +43,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXAttentionCaptureSetup":      "LTX Attn — Setup Capture",
     "LTXAttentionHeadFreeze":        "LTX Attn — Head Freeze",
     "LTXQKVTransfer":                "LTX Attn — QKV Transfer",
+    "LTXQKVMultiplier":              "LTX Attn — QKV Multiplier",
     "LTXAttentionQueryMap":          "LTX Attn — Query Map",
     "LTXAttentionKeyMap":            "LTX Attn — Key Map",
     "LTXAttentionMetricsViz":        "LTX Attn — Metrics Heatmap",

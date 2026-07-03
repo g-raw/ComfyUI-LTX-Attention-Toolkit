@@ -318,6 +318,38 @@ instead.
 
 ---
 
+#### `LTX Attn — QKV Multiplier`
+Scales Q, K, V and/or the attention output per targeted head — a live
+multiply, no prior capture needed. Amplify a head (`> 1.0`) or try to
+kill it (`0.0`), or several at once.
+
+| Input | Type | Description |
+|---|---|---|
+| `targets` | STRING | Same format as `Head Freeze`/`QKV Transfer`: paste `Head Candidates`' `candidates_csv` directly, or `block:head \| block:h1,h2,... \| block:all \| ...`. A whole-string `all` (or `all:all`) targets every block (0-47) and head (0-31). Blank = disable (see below) |
+| `apply_sa` / `apply_ca` | BOOLEAN | Which attention type(s) to affect |
+| `q_mult` / `k_mult` / `v_mult` / `o_mult` | FLOAT | Per-head multipliers, shared across every target (`-10.0`–`10.0`, default `1.0` = no-op) |
+| `from_step` / `to_step` | INT | Denoising step range (per targeted block) the multiply is active for. Defaults to the full range (`0`–`999`) |
+
+**Q/K vs. V/O — these are not interchangeable:** `q_mult`/`k_mult`
+rescale the softmax logits before the attention weights are computed —
+they change how *sharp or flat* the head's attention distribution is.
+Setting either to `0` doesn't ablate the head, it just makes it attend
+uniformly over every key (still contributes via V, just unfocused).
+`v_mult`/`o_mult` scale the head's actual contribution to the output —
+`0` on either one genuinely zeroes the head out (mathematically
+equivalent to scaling that head's columns of the block's output
+projection). Use `v_mult`/`o_mult` to kill/amplify a head's influence;
+use `q_mult`/`k_mult` to experiment with attention sharpness instead.
+
+**To disable, clear `targets` — don't use ComfyUI's node bypass/mute.**
+Same reasoning as `Head Freeze`/`QKV Transfer`: this node patches the
+shared `diffusion_model` directly, and bypass/mute skips this node's
+cleanup entirely, leaving a stale patch from an earlier run in effect.
+Blanking `targets` still runs the node's code and reliably unwraps
+instead.
+
+---
+
 ### IO & Debug
 
 | Node | Description |
@@ -522,8 +554,9 @@ Priority order per call:
 1. Profiling → AttentionStore (metrics + key/query/full maps)
 2. QKV Capture → QKVStore
 3. QKV Transfer → Q/K/V substitution
-4. Head Freeze → map injection
-5. Normal pass-through
+4. QKV Multiplier → per-head Q/K/V/O scaling
+5. Head Freeze → map injection
+6. Normal pass-through
 
 ### Why visualization/intervention nodes use a typed `store_handle` string
 
