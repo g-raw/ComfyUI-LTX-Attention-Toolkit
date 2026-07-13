@@ -263,10 +263,6 @@ cleaned up and stays in effect even though the node "looks" disabled.
 An empty `targets` field still runs the node's code, so it reliably
 unwraps and passes the model through untouched.
 
-**Effect on head 8, block 24:**
-Prevents the temporal window from shrinking during denoising →
-the model maintains long-range temporal coherence.
-
 ---
 
 #### `LTX Attn — QKV Transfer`
